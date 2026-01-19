@@ -84,25 +84,9 @@ class LLMProvider:
     
     def _select_model(self, query_type: Optional[str]) -> str:
         """Select best model based on query type."""
-        if self.provider != "openrouter":
-            return self.model
-        
-        # Model selection strategy for OpenRouter
-        # Common model names: deepseek/deepseek-chat, deepseek/deepseek-reasoner, google/gemini-2.0-flash-exp
-        if query_type == "aggregate" or query_type == "summary":
-            # Simple queries -> cheapest
-            # Try common DeepSeek model names
-            if "deepseek" in self.model.lower():
-                return self.model  # Use configured model
-            return "deepseek/deepseek-chat"
-        elif query_type == "comparison" or query_type == "analysis":
-            # Complex queries -> better reasoning
-            if "deepseek" in self.model.lower() and "r1" in self.model.lower():
-                return self.model
-            return "deepseek/deepseek-reasoner" if "deepseek" in self.model.lower() else self.model
-        else:
-            # Default or use configured model
-            return self.model
+        # For now, strictly use the configured model to avoid overriding user preference
+        # or switching to models that require credits (like DeepSeek) when using free ones.
+        return self.model
     
     async def _generate_openrouter(
         self,
