@@ -12,8 +12,19 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(false);
+    const [history, setHistory] = useState<string[]>([]);
+    const [historyIndex, setHistoryIndex] = useState(-1);
 
     const submitQuestion = async (text: string) => {
+        if (!text.trim()) return;
+        
+        // Add to history if different from last entry
+        setHistory(prev => {
+            if (prev.length > 0 && prev[prev.length - 1] === text) return prev;
+            return [...prev, text];
+        });
+        setHistoryIndex(-1); // Reset history pointer
+
         const userMsg: Message = {
             id: Date.now().toString(),
             role: 'user',
@@ -57,6 +68,37 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
             setMessages(prev => [...prev, errorMsg]);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (!loading && input.trim()) {
+                handleSend();
+            }
+            return;
+        }
+
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (history.length === 0) return;
+            
+            const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
+            setHistoryIndex(newIndex);
+            setInput(history[newIndex]);
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (history.length === 0 || historyIndex === -1) return;
+
+            const newIndex = historyIndex + 1;
+            if (newIndex >= history.length) {
+                setHistoryIndex(-1);
+                setInput('');
+            } else {
+                setHistoryIndex(newIndex);
+                setInput(history[newIndex]);
+            }
         }
     };
 
@@ -139,10 +181,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                         type="text"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                        onKeyDown={handleKeyDown}
                         placeholder="Ask about your activities..."
                         className="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
-                        disabled={loading}
+                        // Removed disabled={loading} to allow typing
                     />
                     <button
                         onClick={handleSend}

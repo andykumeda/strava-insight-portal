@@ -4,10 +4,13 @@ sqlalchemy
 psycopg2-binary
 httpx
 python-jose[cryptography]
-google-generativeai
+google-genai
 openai
 python-dotenv
 requests
 pydantic
 pydantic-settings
 dateparser
+polyline
+slowapi
+cryptography

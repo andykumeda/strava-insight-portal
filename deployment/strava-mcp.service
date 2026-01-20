@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 User=andy
-WorkingDirectory=/home/andy/Dev/strava-mcp
-EnvironmentFile=/home/andy/Dev/strava-mcp/backend/.env
+WorkingDirectory=/var/www/strava-insight-portal
+EnvironmentFile=/var/www/strava-insight-portal/backend/.env
 # Note: MCP server needs some env vars too, specifically credentials if using refresh mode, 
 # but our modified version relies on headers. However, it still uses client_id for refresh logic internally.
-ExecStart=/home/andy/Dev/strava-mcp/venv/bin/python mcp-server/src/strava_http_server.py
+ExecStart=/var/www/strava-insight-portal/venv/bin/python mcp-server/src/strava_http_server.py
 Restart=always
 
 [Install]

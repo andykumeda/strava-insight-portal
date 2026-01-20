@@ -28,9 +28,16 @@ class LLMProvider:
         
         # Initialize clients based on provider
         if self.provider == "openrouter":
-            self.api_key = os.getenv("OPENROUTER_API_KEY")
+            self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
             if not self.api_key:
                 raise ValueError("OPENROUTER_API_KEY not set")
+            
+            # Securely log confirmation that the key is loaded
+            import logging
+            import hashlib
+            key_hash = hashlib.sha256(self.api_key.encode()).hexdigest()[:16]
+            logging.getLogger("uvicorn").info(f"Loaded OpenRouter Key (sha256-hash: {key_hash})")
+
             # Store referer for headers
             self.referer = os.getenv("OPENROUTER_REFERER", "http://localhost:8000")
             # Keep AsyncOpenAI client for potential future use, but we'll use httpx directly
@@ -192,4 +199,3 @@ def get_llm_provider() -> LLMProvider:
     if _llm_provider is None:
         _llm_provider = LLMProvider()
     return _llm_provider
-
