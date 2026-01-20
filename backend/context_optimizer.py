@@ -297,9 +297,8 @@ class ContextOptimizer:
         2. Includes all necessary data
         3. Uses summaries when appropriate
         """
-        # Always include summary data (small, essential)
+        # Initial context (stats only)
         optimized = {
-            "summary_by_year": self.by_year,
             "stats": self.stats,
         }
         
@@ -328,6 +327,7 @@ class ContextOptimizer:
         if is_aggregate and not needs_list:
             optimized["strategy"] = "summary_only"
             optimized["note"] = "Aggregates use monthly/yearly summaries"
+            optimized["summary_by_year"] = self.by_year  # Include summary for this strategy
             print(f"ContextOptimizer: Chosen strategy: {optimized['strategy']} (Aggregates)")
             return optimized
         
@@ -361,6 +361,7 @@ class ContextOptimizer:
             if relevant_activities:
                 # print(f"ContextOptimizer: Full details. First activity sample: {relevant_activities[0]}")
                 pass
+            # NOTE: We intentionally DO NOT include summary_by_year here to avoid conflicting with actual data.
             return optimized
         
         # Too large - need to be smarter
@@ -422,6 +423,7 @@ class ContextOptimizer:
                 recent_activities.append(activity)
         
         optimized["relevant_activities"] = recent_activities
+        optimized["summary_by_year"] = self.by_year  # Include summary as backup
         optimized["strategy"] = "summary_plus_recent"
         optimized["note"] = "Using year summaries + recent 30 days of activities. For older data, summaries are available."
         optimized["recent_activity_count"] = len(recent_activities)

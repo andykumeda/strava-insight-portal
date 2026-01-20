@@ -8,6 +8,7 @@ A production-ready web application that lets users log in with Strava and ask na
 - **Natural Language**: Ask questions like "How many miles did I run in 2025 vs 2024?" or "Show me runs where I mentioned 'pain' in the notes."
 - **Smart Context**: Dynamically switches between summary data (for fast aggregates) and detailed activity records (for specific searches) to optimize performance and cost.
 - **Private Notes Search**: Supports searching your activity notes and descriptions for keywords (e.g., "race", "injury", "easy").
+- **Enriched Activity Details**: Automatically pulls top segments and formats them with clickable links, exact times, and structured headers when you ask for details about a specific run.
 
 ### ⚡ Performance & Scale
 - **Full History Access**: Fetches and caches your entire Strava activity history (thousands of activities).

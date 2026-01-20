@@ -26,11 +26,12 @@ const LandingPage: React.FC = () => {
             </div>
             <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 text-center transition-colors duration-200">
                 <div className="flex justify-center mb-6">
-                    <div className="p-4 bg-orange-100 dark:bg-orange-900/30 rounded-full">
-                        <Activity className="w-12 h-12 text-orange-600" />
-                    </div>
+                    <img src="/logo.svg" alt="ActivityCopilot Logo" className="w-24 h-24 drop-shadow-lg" />
                 </div>
-                <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">ActivityCopilot</h1>
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2 flex items-center justify-center gap-2">
+                    <Activity className="w-8 h-8 text-orange-600" />
+                    ActivityCopilot
+                </h1>
                 <p className="text-xl font-medium text-gray-700 dark:text-gray-200 mb-2">
                     Ask anything about your Strava training data.
                 </p>

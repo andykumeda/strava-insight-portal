@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Send, User as UserIcon } from 'lucide-react';
+import { Send, User as UserIcon, Activity } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import type { User, Message } from '../types';
 import { API_ENDPOINTS } from '../config';
@@ -113,7 +113,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
             {/* Header */}
             <header className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-6 py-4 flex items-center justify-between shadow-sm transition-colors duration-200">
-                <h1 className="text-xl font-bold text-gray-800 dark:text-white">ActivityCopilot</h1>
+                <div className="flex items-center gap-2">
+                    <Activity className="w-6 h-6 text-orange-600" />
+                    <h1 className="text-xl font-bold text-gray-800 dark:text-white">ActivityCopilot</h1>
+                </div>
                 <div className="flex items-center gap-4">
                     <ThemeToggle />
                     <div className="flex items-center gap-2">

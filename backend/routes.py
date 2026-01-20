@@ -3,6 +3,7 @@ import re
 import asyncio
 import httpx
 import logging
+import json
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
@@ -124,6 +125,10 @@ async def query_strava_data(
         stats_data = stats_resp.json() if stats_resp.status_code == 200 else {"error": "Failed to fetch stats"}
         activity_summary_data = activities_resp.json() if activities_resp.status_code == 200 else {"error": "Failed to fetch activities"}
         
+        if "activities_by_date" in activity_summary_data:
+             # print(f"DEBUG: Activity Days Count: {len(activity_summary_data['activities_by_date'])}", flush=True)
+             pass
+
         context_data = {
             "stats": stats_data,
             "activity_summary": activity_summary_data
@@ -141,8 +146,10 @@ async def query_strava_data(
             
             # Log the strategy for debugging
             logger = logging.getLogger(__name__)
-            logger.info(f"Query: '{query.question}' | Strategy: {optimized_context.get('strategy')} | Note: {optimized_context.get('note')}")
-
+            strategy = optimized_context.get('strategy')
+            note = optimized_context.get('note')
+            logger.info(f"Query: '{query.question}' | Strategy: {strategy} | Note: {note}")
+            
             # SEGMENT CONTEXT INJECTION
             # Check if any persisted segments are mentioned in the query
             try:
@@ -262,11 +269,11 @@ async def query_strava_data(
             # fetch the full details (which contain private_note and segments) to enrich the context.
             # This ensures segments are synced more often and short queries get high fidelity.
             relevant = optimized_context.get("relevant_activities", [])
-            needs_enrichment = any(w in query.question.lower() for w in ['note', 'desc', 'pain', 'detail', 'mention', 'say', 'with'])
+            needs_enrichment = any(w in query.question.lower() for w in ['note', 'desc', 'pain', 'detail', 'mention', 'say', 'with', 'segment'])
             is_small_set = len(relevant) <= 5
             
-            if relevant and (needs_enrichment or is_small_set) and len(relevant) < 20:
-                logger.info(f"Enriching {len(relevant)} activities with full details (for notes/desc)...")
+            if relevant and (needs_enrichment or is_small_set) and len(relevant) < 50:
+                logger.info(f"Enriching {len(relevant)} activities with full details (for notes/desc/segments)...")
                 try:
                     async with httpx.AsyncClient(timeout=30.0) as detail_client:
                         # Fetch details in parallel
@@ -285,6 +292,17 @@ async def query_strava_data(
                                 relevant[i]['description'] = detailed_data.get('description')
                                 # Also update name/type just in case
                                 relevant[i]['name'] = detailed_data.get('name')
+                                
+                                # Inject top segments for context
+                                segs = detailed_data.get('segment_efforts', [])
+                                relevant[i]['segments'] = [
+                                    {
+                                        'name': s.get('name'), 
+                                        'elapsed_time': s.get('elapsed_time'),
+                                        'id': s.get('segment', {}).get('id')
+                                    } 
+                                    for s in segs[:15]
+                                ]
                                 
                                 # Persist segments found in this detailed activity
                                 try:
@@ -308,29 +326,46 @@ async def query_strava_data(
         system_instruction = """You are a helpful assistant analyzing Strava fitness data.
 
 IMPORTANT INSTRUCTIONS:
-- **DATA STRUCTURE**: The context may contain a `summary_by_year` object.
-  - Inside `summary_by_year`, each year has a `by_month` dictionary (keys are "YYYY-MM").
-  - Inside each month, there is a `by_type` dictionary containing counts and distances for each activity type (Run, Ride, Walk, etc.).
-  - USE THIS `by_type` DATA for monthly aggregate questions like "how many runs" or "how many walks".
-- **NOTES & DESCRIPTIONS**: Detailed activities include `private_note` and `description`. Use these to answer questions about specific keywords (e.g. "pain", "easy", "race report").
-- **ACTIVITY TYPES**: When asked about "runs" or "running", you MUST include BOTH "Run" and "Trail Run" activity types. Treat them as the same category for totals unless asked to distinguish.
-- **RACES**: Always note if an activity was a race (look for "Race" in the name or type).
-- **UNITS**: Data is already in imperial units (miles and feet). Always show distances in MILES and elevation in FEET.
-- **PACE**: Show pace as minutes per mile (e.g., "8:30/mile").
-- **DATES**: When asked about a specific date, show ALL activities from that date.
-- **FORMATTING**: Use Markdown. Use bullet points (-) for lists and **bold** for key stats.
+- **DATA FIELDS**: The activity data provided uses specific field names:
+  - `distance_miles`: Distance of the activity in miles.
+  - `elevation_feet`: Elevation gain in feet.
+  - `moving_time_seconds`: Moving time in seconds (convert to hours/minutes for display).
+  - `type`: Activity type (e.g., Run, Ride, TrailRun).
+  - `name`: Name of the activity.
+  - `date`: Date of the activity (YYYY-MM-DD).
+  - `segments`: List of segments (name, elapsed_time, id) for detailed activities. Format `elapsed_time` (seconds) as minutes:seconds (e.g., "5:30").
+
+- **LINKING & FORMATTING**:
+  - **ACTIVITY STRUCTURE**: 
+    1. Start with the Activity Name as a Heading 3 link: `### [Activity Name](https://www.strava.com/activities/{id})`
+    2. Follow with a bulleted list for stats (Distance, Elevation, Moving Time).
+    3. If listing segments, use Heading 4: `#### Top Segments`
+    4. List segments as bullet points with links: `- [Segment Name](https://www.strava.com/segments/{id}) - {elapsed_time}`
+  - **EXAMPLE**:
+    ### [Morning Run](https://www.strava.com/activities/12345)
+    - **Distance**: 5.2 miles
+    - **Elevation**: 400 ft
+    - **Time**: 45:30
+    #### Top Segments
+    - [Big Hill](https://www.strava.com/segments/987) - 12:30
+    - [Sprint Finish](https://www.strava.com/segments/654) - 0:45
+
 - **COMPARISONS**: When comparing years, only compare matching time periods.
-- **CALCULATIONS**: Be precise. If data is incomplete, acknowledge it.
+- **CALCULATIONS**: You are a data analyst. If the user asks for aggregates (e.g., "weekly mileage") and you have a list of activities, YOU MUST CALCULATE the aggregates yourself by summing the relevant fields (e.g., `distance_miles`) for the requested time periods. Do not say data is missing if you have the list of activities.
 - **SUMMARIES**: Use summary_by_year for aggregate queries when detailed activities aren't provided.
 - **TONE**: Provide concise and encouraging responses."""
 
         # User prompt (minimal, dynamic content)
+        # User prompt (minimal, dynamic content)
+        # Ensure context is valid JSON for the LLM
+        context_json = json.dumps(optimized_context, indent=2, default=str)
+        
         user_prompt = f"""=== USER QUESTION ===
 {query.question}
 === END USER QUESTION ===
 
 === DATA ===
-{optimized_context}
+{context_json}
 === END DATA ===
 
 Answer the user's question based on this data. If the answer cannot be determined from the data, say so."""
@@ -383,6 +418,8 @@ Answer the user's question based on this data. If the answer cannot be determine
         
         return QueryResponse(answer=answer_text, data_used=context_data)
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
         import traceback
         print(f"CRITICAL ROUTE ERROR: {str(e)}\n{traceback.format_exc()}", flush=True)
