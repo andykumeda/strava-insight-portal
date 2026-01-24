@@ -384,7 +384,7 @@ async def query_strava_data(
 
             relevant_list = optimized_context.get("relevant_activities", [])
             named_matches = [act for act in relevant_list if any(name.lower() in act.get('name', '').lower() for name in potential_names)]
-            needs_enrichment = any(w in query.question.lower() for w in ['note', 'desc', 'pain', 'detail', 'mention', 'say', 'with', 'segment', 'cr', 'kom', 'rank', 'what', 'yesterday', 'today', 'run', 'ride', 'exactly'])
+            needs_enrichment = any(w in query.question.lower() for w in ['note', 'desc', 'pain', 'detail', 'mention', 'say', 'with', 'segment', 'cr', 'kom', 'rank', 'what', 'yesterday', 'today', 'run', 'ride', 'exactly', 'gpx', 'download', 'export'])
             
             if relevant_list and (named_matches or needs_enrichment or len(relevant_list) <= 5):
                 # Prioritize activities that match query terms using smart scoring
