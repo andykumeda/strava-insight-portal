@@ -291,16 +291,38 @@ async def query_strava_data(
                     for seg_id, seg_name in matched_segments:
                         logger.info(f"Proactively fetching details for segment: {seg_name} ({seg_id})")
                         
-                        # Fetch in parallel: Details, Leaderboard, and USER EFFORTS (History)
+                        # Fetch in parallel: Details and Leaderboard
                         detail_task = seg_client.get(f"{MCP_SERVER_URL}/segments/{seg_id}", headers=headers)
                         lb_task = seg_client.get(f"{MCP_SERVER_URL}/segments/{seg_id}/leaderboard", headers=headers)
-                        efforts_task = seg_client.get(f"{MCP_SERVER_URL}/segments/{seg_id}/efforts", headers=headers)
                         
-                        resps = await asyncio.gather(detail_task, lb_task, efforts_task, return_exceptions=True)
+                        # Fetch ALL effort pages (Strava API paginates at 200 per page)
+                        all_efforts = []
+                        page = 1
+                        while True:
+                            efforts_resp = await seg_client.get(
+                                f"{MCP_SERVER_URL}/segments/{seg_id}/efforts",
+                                headers=headers,
+                                params={"page": page, "per_page": 200}
+                            )
+                            if efforts_resp.status_code == 200:
+                                page_efforts = efforts_resp.json()
+                                if not page_efforts or not isinstance(page_efforts, list):
+                                    break
+                                all_efforts.extend(page_efforts)
+                                logger.info(f"Segment {seg_name}: fetched page {page} with {len(page_efforts)} efforts (total: {len(all_efforts)})")
+                                if len(page_efforts) < 200:  # Last page
+                                    break
+                                page += 1
+                                await asyncio.sleep(0.5)  # Rate limit protection
+                            else:
+                                logger.warning(f"Failed to fetch efforts page {page} for segment {seg_id}: {efforts_resp.status_code}")
+                                break
+                        
+                        resps = await asyncio.gather(detail_task, lb_task, return_exceptions=True)
                         
                         segment_details = resps[0].json() if isinstance(resps[0], httpx.Response) and resps[0].status_code == 200 else {}
                         leaderboard_data = resps[1].json() if isinstance(resps[1], httpx.Response) and resps[1].status_code == 200 else {}
-                        effort_history = resps[2].json() if isinstance(resps[2], httpx.Response) and resps[2].status_code == 200 else []
+                        effort_history = all_efforts
 
                         # Extract activity IDs from effort history and fetch activity summaries
                         # This allows AI to show which activities contain this segment
