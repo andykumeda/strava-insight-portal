@@ -333,8 +333,13 @@ class ContextOptimizer:
                     
         return (score, activity.get('start_time', ''))
 
-    def filter_by_keyword(self, activities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter activities by keywords found in quotes or after 'with'/'contains'."""
+    def filter_by_keyword(self, activities: List[Dict[str, Any]], date_range_applied: bool = False) -> List[Dict[str, Any]]:
+        """Filter activities by keywords found in quotes or after 'with'/'contains'.
+        
+        Args:
+            activities: List of activities to filter
+            date_range_applied: If True, skip aggressive keyword extraction to avoid filtering by date components
+        """
         question_lower = self.question.lower()
         
         # Extract potential keywords
@@ -353,8 +358,9 @@ class ContextOptimizer:
                 if word not in blacklist:
                     keywords.append(word)
         
-        if not keywords:
-            # 3. Aggressive extraction: catch distances (numbers), specific route parts, etc.
+        # 3. Aggressive extraction: ONLY if no date range was applied
+        # This prevents date components (like "18", "2025") from being extracted as keywords
+        if not keywords and not date_range_applied:
             # Avoid single stop words, but catch numbers and capitalized names
             words = re.findall(r'\b(?:\d+\.?\d*|[A-Z]\w+)\b', self.question)
             blacklist = ['The', 'What', 'How', 'List', 'Show', 'This', 'That', 'These', 'Those']
@@ -448,8 +454,9 @@ class ContextOptimizer:
             
         # Apply Keyword Filtering (Content)
         # This allows "find runs with 'pain'" or "how many runs mention '16th'" to work over history
+        # Pass date_range_applied=True if we already filtered by date to prevent date components from being keywords
         pre_keyword_count = len(relevant_activities)
-        relevant_activities = self.filter_by_keyword(relevant_activities)
+        relevant_activities = self.filter_by_keyword(relevant_activities, date_range_applied=(date_range is not None))
         has_keywords = len(relevant_activities) < pre_keyword_count
 
         # Check if question explicitly needs a list or specific details
