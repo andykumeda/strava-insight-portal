@@ -387,22 +387,49 @@ async def query_strava_data(
             needs_enrichment = any(w in query.question.lower() for w in ['note', 'desc', 'pain', 'detail', 'mention', 'say', 'with', 'segment', 'cr', 'kom', 'rank', 'what', 'yesterday', 'today', 'run', 'ride', 'exactly'])
             
             if relevant_list and (named_matches or needs_enrichment or len(relevant_list) <= 5):
-                activities_to_enrich = named_matches[:3] if named_matches else relevant_list[:3]
-                logger.info(f"Enriching {len(activities_to_enrich)} activities for query context...")
-                # Prioritize activities that match query terms
+                # Prioritize activities that match query terms using smart scoring
                 try:
                     query_lower = query.question.lower()
                     def relevance_score(act):
                         score = 0
-                        full_text = f"{str(act.get('name', '')).lower()} {str(act.get('private_note', '')).lower()} {str(act.get('description', '')).lower()}"
-                        stop_words = {'what', 'was', 'the', 'list', 'all', 'segments', 'from', 'at', 'in', 'on', 'my', 'run', 'ride', 'did', 'last'}
+                        full_text = f"{str(act.get('name', ''))} {str(act.get('private_note', ''))} {str(act.get('description', ''))}".lower()
+                        # Use a broader set of stop words to focus on meaningful content
+                        stop_words = {'what', 'was', 'the', 'list', 'all', 'segments', 'from', 'at', 'in', 'on', 'my', 'run', 'ride', 'did', 'last', 'show', 'me', 'how', 'about'}
                         query_words = [w for w in re.findall(r'\w+', query.question.lower()) if w not in stop_words]
                         
-                        # Content match
+                        # 1. Content match
                         for w in query_words:
                             if w in full_text: score += 10
                             
-                        # Distance match (very high priority for enrichment)
+                        # 2. Name Match (High Priority)
+                        if potential_names:
+                            for name_part in potential_names:
+                                if name_part.lower() in str(act.get('name', '')).lower():
+                                    score += 200
+                        
+                        # 3. Recency Match (Critical for "my run today")
+                        try:
+                            # Parse ISO date "2024-01-23T..."
+                            start_str = act.get('start_date', '') or act.get('start_time', '')
+                            if start_str:
+                                # Simple string prefix match for Current Year/Month often enough, but let's be robust
+                                # We'll just give a blanket boost to the most recent items by using the timestamp effectively
+                                # But to keep "score" comparable, we add step functions.
+                                from datetime import datetime, timedelta
+                                act_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                                now = datetime.now(act_dt.tzinfo)
+                                delta = now - act_dt
+                                
+                                if delta.days < 2:
+                                    score += 500  # "Today/Yesterday" - Absolute Priority
+                                elif delta.days < 7:
+                                    score += 150  # "This week"
+                                elif delta.days < 30:
+                                    score += 50   # "This month"
+                        except Exception:
+                            pass
+
+                        # 4. Distance match (very high priority for enrichment)
                         dist = act.get('distance_miles', 0)
                         for w in query_words:
                             if w.replace('.', '', 1).isdigit():
@@ -572,6 +599,7 @@ IMPORTANT INSTRUCTIONS:
 2. **ACTIVITY TITLES**: Always link activity names as Heading 3: `### [Activity Name](https://www.strava.com/activities/{id})`
 3. **SEGMENTS**: List segments under `#### Top Segments`. If no segments are in the data, state "No segments found".
 4. **DISTANCE DISPLAY**: For "exactly" queries, round to 1 decimal place (e.g. "5.0 miles") if the data is within 0.05 miles of the target.
+5. **GPX DOWNLOAD**: If the user asks to export/download a route as GPX, provide a download link: `[Download GPX File](/api/routes/{route_id}/gpx)`
 
 
 === USER QUESTION ===
@@ -693,6 +721,29 @@ async def get_activity_map(
         except Exception as e:
             logger.error(f"Map proxy failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/routes/{route_id}/gpx")
+async def download_route_gpx(
+    route_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Proxy route GPX download to MCP server."""
+    try:
+        token = await get_valid_token(user, db)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # enable streaming response for file download
+            req = client.build_request("GET", f"{MCP_SERVER_URL}/routes/{route_id}/export_gpx", headers={"X-Strava-Token": token})
+            r = await client.send(req, stream=True)
+            
+            return Response(
+                content=await r.read(),
+                media_type=r.headers.get("content-type"),
+                headers={"Content-Disposition": r.headers.get("content-disposition"), "Content-Type": r.headers.get("content-type")}
+            )
+    except Exception as e:
+        logger.error(f"GPX proxy failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @router.get("/test-data")
 async def get_test_data(user: User = Depends(get_current_user), db: Session = Depends(get_db)):

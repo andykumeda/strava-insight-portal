@@ -95,8 +95,11 @@ app = FastAPI(
     description="HTTP server for Strava API integration",
 )
 
-async def make_strava_request(url: str, method: str = "GET", params: Dict[str, Any] = None, access_token: str = None) -> Any:
-    """Make a request to the Strava API with STRICT Rate Limiting."""
+async def make_strava_request(url: str, method: str = "GET", params: Dict[str, Any] = None, access_token: str = None, response_type: str = "json") -> Any:
+    """
+    Make a request to the Strava API with STRICT Rate Limiting.
+    response_type: "json" (default), "text", or "content" (binary)
+    """
     if not access_token:
         raise HTTPException(status_code=401, detail="Missing X-Strava-Token header")
     
@@ -147,6 +150,10 @@ async def make_strava_request(url: str, method: str = "GET", params: Dict[str, A
                 # 2. RECORD SUCCESSFUL REQUEST
                 rate_limiter.record_request()
                 
+                if response_type == "text":
+                    return response.text
+                elif response_type == "content":
+                    return response.content
                 return response.json()
                 
             except httpx.HTTPStatusError as e:
@@ -945,6 +952,21 @@ async def get_clubs(x_strava_token: str = Header(..., alias="X-Strava-Token")) -
 async def get_routes(x_strava_token: str = Header(..., alias="X-Strava-Token"), limit: int = 50) -> List[Dict[str, Any]]:
     """List the authenticated athlete's created routes."""
     return await make_strava_request(f"{STRAVA_API_BASE_URL}/athlete/routes", params={"per_page": limit}, access_token=x_strava_token)
+
+@app.get("/routes/{route_id}/export_gpx")
+async def get_route_gpx(route_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")):
+    """Download the GPX file for a route."""
+    gpx_content = await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/routes/{route_id}/export_gpx", 
+        access_token=x_strava_token,
+        response_type="content"
+    )
+    
+    return Response(
+        content=gpx_content,
+        media_type="application/gpx+xml",
+        headers={"Content-Disposition": f"attachment; filename=route_{route_id}.gpx"}
+    )
 
 @app.get("/activities/{activity_id}/map")
 async def get_activity_with_map(activity_id: int, format: str = 'html', x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Response:

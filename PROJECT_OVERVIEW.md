@@ -41,6 +41,7 @@ The ActivityCopilot is a robust, secure, and performant application allowing use
 - **Segment Counts**: Fixed broken MCP caching that prevented pagination. Counts are now accurate (e.g. 126 vs 46).
 - **Activity Names**: Updated `routes.py` to inject real activity names into segment effort lists.
 - **Sync Status**: Fixed stalled sync and **optimized speed** (bumped throttles). Progress is auto-saved to disk, so it survives restarts.
+- **GPX Export**: Added support for downloading route GPX files directly via the chat interface (`/api/routes/{id}/gpx`).
 - **Stability**: Resolved "Address already in use" errors with robust start script.
 
 ### 3. Future Roadmap
