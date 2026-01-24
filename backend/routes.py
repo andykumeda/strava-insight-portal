@@ -316,6 +316,7 @@ async def query_strava_data(
                             },
                             "effort_history": [
                                 {
+                                    "activity_id": e.get("activity", {}).get("id") if isinstance(e.get("activity"), dict) else e.get("activity"),
                                     "date": e.get("start_date_local"),
                                     "time_str": format_seconds_to_str(e.get("elapsed_time")),
                                     "elapsed_time": e.get("elapsed_time"),
