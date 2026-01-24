@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from typing import Dict
 
@@ -228,7 +229,6 @@ async def query_strava_data(
 
             
             # Log the strategy for debugging
-            logger = logging.getLogger(__name__)
             strategy = optimized_context.get('strategy')
             note = optimized_context.get('note')
             logger.info(f"Query: '{query.question}' | Strategy: {strategy} | Note: {note}")
