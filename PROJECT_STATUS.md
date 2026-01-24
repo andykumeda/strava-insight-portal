@@ -27,9 +27,15 @@ The ActivityCopilot is a robust, secure, and performant application allowing use
 ### Full-History Private Note Search
 **Status**: Limited Support
 - **Issue**: The Strava List API does not return `private_note` or `description` fields.
-- **Impact**: We cannot search *all* historical notes instantly without fetching details for every single activity (thousands of API calls).
-- **Current Solution**: The system allows searching notes for **specific date ranges** or **recent activities** (up to ~20 items) by dynamically fetching details on demand.
-- **Future Work**: Implement a background crawler to slowly index all historical activity details into a local database for full-text search capability.
+- **Impact**: We cannot search *all* historical notes instantly without fetching details for every single activity.
+- **Current Solution**: The system allows searching notes for **specific date ranges** or **recent activities** by dynamically fetching details on demand.
+
+### Segment History & Analysis
+**Status**: ✅ Completed
+- **Full History**: Successfully paginates Strava API to fetch *all* efforts (verified 13+ years).
+- **Rich Context**: Links efforts to specific activities with names (e.g. "Morning Run") vs generic labels.
+- **Accuracy**: Fixed caching bugs that previously limited results to page 1 (~100 items).
+- **Limitations**: Counts may be slightly lower than Strava website total due to hidden/private activities (API returns only viewable efforts).
 
 ---
 

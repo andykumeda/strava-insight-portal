@@ -786,27 +786,23 @@ async def get_segment(segment_id: int, x_strava_token: str = Header(..., alias="
 
 @app.get("/segments/{segment_id}/efforts")
 async def get_segment_efforts(segment_id: int, page: int = 1, per_page: int = 50, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> List[Dict[str, Any]]:
-    """Get all efforts for a segment for the authenticated athlete, with caching."""
-    # Only cache page 1 for simplicity
-    if page == 1:
-        cache_entry = SEGMENT_CACHE.get(segment_id)
-        now = time.time()
-        if cache_entry and "efforts" in cache_entry and (now - cache_entry.get("efforts_fetched_at", 0)) < SEGMENT_EFFORTS_TTL:
-             logger.info(f"Segment Efforts Cache Hit: {segment_id}")
-             return cache_entry["efforts"]
-
+    """Get all efforts for a segment for the authenticated athlete.
+    
+    NOTE: Caching disabled for efforts to support full pagination.
+    The backend fetches ALL pages with per_page=200, so caching page 1 
+    with a smaller per_page was causing incomplete results.
+    """
+    # CACHE DISABLED - was preventing full pagination
+    # The issue: Cache stored page 1 with per_page=50, then when backend
+    # requested per_page=200, it returned the cached 50-result subset,
+    # preventing pagination from fetching all 183 efforts.
+    
     efforts = await make_strava_request(
         f"{STRAVA_API_BASE_URL}/segment_efforts",
         params={"segment_id": segment_id, "page": page, "per_page": per_page},
         access_token=x_strava_token
     )
     
-    if page == 1:
-        if segment_id not in SEGMENT_CACHE:
-            SEGMENT_CACHE[segment_id] = {}
-        SEGMENT_CACHE[segment_id]["efforts"] = efforts
-        SEGMENT_CACHE[segment_id]["efforts_fetched_at"] = time.time()
-        
     return efforts
 
 @app.get("/segments/{segment_id}/leaderboard")

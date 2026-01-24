@@ -285,6 +285,7 @@ async def query_strava_data(
 
                 # CAP matched segments and fetch details/efforts
                 matched_segments = matched_segments[:5]
+                logger.info(f"Segment matching: found {len(matched_segments)} segments: {matched_segments}")
                 found_segments_data = []
                 
                 async with httpx.AsyncClient(timeout=15.0) as seg_client:
@@ -359,6 +360,7 @@ async def query_strava_data(
                             "effort_history": [
                                 {
                                     "activity_id": e.get("activity", {}).get("id") if isinstance(e.get("activity"), dict) else e.get("activity"),
+                                    "activity_name": next((a["name"] for a in segment_activities if a["id"] == (e.get("activity", {}).get("id") if isinstance(e.get("activity"), dict) else e.get("activity"))), "Unknown Activity"),
                                     "date": e.get("start_date_local"),
                                     "time_str": format_seconds_to_str(e.get("elapsed_time")),
                                     "elapsed_time": e.get("elapsed_time"),
@@ -590,8 +592,16 @@ Answer the user's question following the MANDATORY RULES above.
 
         from .models import LLMCache
         
-        # Hash both prompt AND instructions to avoid stale cached formatting
-        combined_prompt = f"{system_instruction}\n\n{user_prompt}"
+        # Hash prompt, instructions, AND critical context metadata to avoid stale cached data
+        # Include segment effort counts to ensure fresh responses when segment data changes
+        context_metadata = ""
+        if "mentioned_segments" in optimized_context:
+            for seg in optimized_context["mentioned_segments"]:
+                seg_id = seg.get("segment_id", "unknown")
+                effort_count = len(seg.get("effort_history", []))
+                context_metadata += f"seg_{seg_id}:{effort_count};"
+        
+        combined_prompt = f"{system_instruction}\n\n{user_prompt}\n\nMETADATA:{context_metadata}"
         prompt_hash = hashlib.sha256(combined_prompt.encode()).hexdigest()
         cached_entry = db.query(LLMCache).filter(LLMCache.prompt_hash == prompt_hash).first()
         
