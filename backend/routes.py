@@ -576,7 +576,6 @@ Answer the user's question following the MANDATORY RULES above.
             
             # Log the full error for debugging
             # import logging (removed to avoid shadowing)
-            logger = logging.getLogger(__name__)
             logger.error(f"LLM generation error: {error_str}")
             
             if "context" in error_msg or "token" in error_msg or "length" in error_msg:
