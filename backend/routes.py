@@ -732,14 +732,12 @@ async def download_route_gpx(
     try:
         token = await get_valid_token(user, db)
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # enable streaming response for file download
-            req = client.build_request("GET", f"{MCP_SERVER_URL}/routes/{route_id}/export_gpx", headers={"X-Strava-Token": token})
-            r = await client.send(req, stream=True)
+            resp = await client.get(f"{MCP_SERVER_URL}/routes/{route_id}/export_gpx", headers={"X-Strava-Token": token})
             
             return Response(
-                content=await r.read(),
-                media_type=r.headers.get("content-type"),
-                headers={"Content-Disposition": r.headers.get("content-disposition"), "Content-Type": r.headers.get("content-type")}
+                content=resp.content,
+                media_type=resp.headers.get("content-type"),
+                headers={"Content-Disposition": resp.headers.get("content-disposition"), "Content-Type": resp.headers.get("content-type")}
             )
     except Exception as e:
         logger.error(f"GPX proxy failed: {e}")
