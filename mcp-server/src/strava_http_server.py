@@ -336,10 +336,7 @@ HYDRATION_LOCK = asyncio.Lock()
 
 async def hydrate_activities_background(token: str):
     """Background task to fetch full details for activities."""
-    # TEMPORARILY DISABLED TO CONSERVE API CALLS DURING DEBUGGING
-    logger.info("Background hydration is TEMPORARILY DISABLED.")
-    return
-
+    
     async with HYDRATION_LOCK:
         logger.info("Starting background hydration of activity details...")
         
