@@ -503,6 +503,7 @@ IMPORTANT INSTRUCTIONS:
   - `elapsed_time_str`: Pre-formatted elapsed time string (e.g., "26h 8m"). **ALWAYS USE THIS FIELD** for elapsed time. Do not calculate from seconds.
   - `elapsed_time_seconds`: Total elapsed time in seconds. Ignored in favor of `elapsed_time_str`.
   - `type`: Activity type (e.g., Run, Ride, TrailRun).
+  - For "list/show activities" queries: Use the `activities_with_segment` array which contains full activity details.
   - `athlete_count`: Number of athletes in the group. Use `athlete_count > 1` to identify runs with others.
   - `route_match_count`: Total number of times this specific route has been run. To find "other" runs on this route, subtract 1.
   - `name`: Name of the activity.
