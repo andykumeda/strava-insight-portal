@@ -14,18 +14,12 @@ The ActivityCopilot is a robust, secure, and performant application allowing use
 - **Authentication:** Secure, HTTP-only, signed JWT cookies (`session_token`) replace legacy auth.
 - **Migrations:** `Alembic` database migrations are fully configured.
 - **Rate Limiting:** `slowapi` protects API endpoints.
-- **Async Core:** Fully asynchronous MCP server (`httpx`) handles large data syncs without blocking.
+- **Async Core:** Fully asynchronous MCP server (`httpx`) handles large data syncs with custom adaptive throttling (90 req / 15m).
 
-### Smart Querying
-- **Summary-First Logic:** Comparison queries (e.g., "runs in 2024 vs 2025") use lightweight summaries for sub-second responses.
-- **Detail Enrichment:** Questions about "notes" or specific keywords automatically trigger a fetch of detailed activity data (including `private_note`) for relevant subsets.
-- **Interactive UI:** Supports command history (Up/Down arrows) and async type-ahead.
-
-### Segment History & Analysis (New!)
-- **Full History**: Successfully paginates Strava API to fetch *all* efforts (verified 13+ years).
-- **Rich Context**: Links efforts to specific activities with names (e.g. "Sunday Long Run") vs generic labels.
-- **Accuracy**: Fixed caching bugs in MCP server that previously limited results to page 1 (~100 items).
-- **Limitations**: Counts may be slightly lower than Strava website total due to hidden/private activities (API returns only viewable efforts).
+### Features & Power Tools
+- **Segment History & Analysis**: Successfully paginates Strava API to fetch *all* efforts (verified 13+ years).
+- **GPX Export Support**: Users can now request and download Strava Routes as GPX files directly from the chat UI.
+- **Smart Prioritization**: Recent activities (+500 score) and specific name matches (+200 score) are prioritized for detailed hydration.
 
 ---
 
@@ -38,11 +32,11 @@ The ActivityCopilot is a robust, secure, and performant application allowing use
 - **Current Solution**: The system allows searching notes for **specific date ranges** or **recent activities** by dynamically fetching details on demand.
 
 ### 2. Recent Bug Fixes (Jan 23, 2026)
-- **Segment Counts**: Fixed broken MCP caching that prevented pagination. Counts are now accurate (e.g. 126 vs 46).
-- **Activity Names**: Updated `routes.py` to inject real activity names into segment effort lists.
-- **Sync Status**: Fixed stalled sync and **optimized speed** (bumped throttles). Progress is auto-saved to disk, so it survives restarts.
-- **GPX Export**: Added support for downloading route GPX files directly via the chat interface (`/api/routes/{id}/gpx`).
-- **Stability**: Resolved "Address already in use" errors with robust start script.
+- **GPX Export Repair**: Fixed a series of backend proxy issues (`NameError`, `AsyncIteratorError`, `NoneType` headers) to ensure robust file serving.
+- **Segment History Pagination**: Fixed broken MCP caching that previously limited results to page 1.
+- **Sync Status**: Optimized speed (2s base sleep, bumped capacity). Progress is auto-saved to disk.
+- **Systemd Removal**: Decommissioned unintended system services to restore full manual control via `start_services.sh`.
+- **Auth Recovery**: Restored missing `.env` config and fixed redirect URI mismatches.
 
 ### 3. Future Roadmap
 - [ ] **Background Sync**: Implement a detailed crawler to fetch full activity details (including notes) for the entire history into a local DB.

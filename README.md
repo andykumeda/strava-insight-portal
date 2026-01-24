@@ -82,26 +82,10 @@ cd frontend
 npm install
 ```
 
-### 3. Run Locally
-**Backend:**
+### 3. Run Locally (Recommended)
 ```bash
-source venv/bin/activate
-uvicorn backend.main:app --port 8000 --reload
-```
-
-**MCP Server:**
-```bash
-source venv/bin/activate
-python mcp-server/src/strava_http_server.py
-```
-
-**Frontend:**
-```bash
-cd frontend
-npm run dev
+./start_services.sh
 ```
 
 ## Project Status
-
-See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the detailed roadmap and completed tasks.
-See [FEATURE_REQUESTS.md](./FEATURE_REQUESTS.md) for known limitations and future ideas.
+See [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md) for the detailed status, recent fixes, and future roadmap.

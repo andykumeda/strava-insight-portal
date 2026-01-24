@@ -693,7 +693,7 @@ Answer the user's question following the MANDATORY RULES above.
         raise he
     except Exception as e:
         import traceback
-        print(f"CRITICAL ROUTE ERROR: {str(e)}\n{traceback.format_exc()}", flush=True)
+        pass
         raise HTTPException(status_code=500, detail="Internal Server Error detected in route handler.")
 
 @router.get("/activities/{activity_id}/map")
