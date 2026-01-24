@@ -502,6 +502,7 @@ IMPORTANT INSTRUCTIONS:
   - The `effort_history` array contains ALL your attempts on that segment, sorted chronologically.
   - For "first time" queries: Use the FIRST entry in effort_history (oldest date).
   - For "last time" queries: Use the LAST entry in effort_history (most recent date).
+  - Each effort includes `activity_id` - use this to create activity links: `https://www.strava.com/activities/{activity_id}`
   - For "how many times" queries: Count the entries in effort_history.
   - **CRITICAL**: Do NOT show a random activity - use the specific date from effort_history.
 - **DATA ANALYSIS**: 
