@@ -21,7 +21,7 @@ class ContextOptimizer:
     
     # Token estimates (rough approximations)
     # Gemini 2.0 Flash has ~1M token context, but we want to stay well under
-    MAX_CONTEXT_TOKENS = 30000  # Conservative limit for stability
+    MAX_CONTEXT_TOKENS = 150000  # 150k for Gemini 2.0 stability
     TOKEN_OVERHEAD = 500  # Prompt overhead
     
     # Token estimates per item
@@ -110,10 +110,13 @@ class ContextOptimizer:
                 # Remove common non-date words that confuse dateparser
                 noise_words = [
                     "report", "show me", "my", "activity", "activities", "stats", "summary",
-                    "what were", "what were the", "what was", "what about", "list", "tell me about"
+                    "what were", "what were the", "what was", "what about", "list", "tell me about",
+                    "what did i do", "what did i", "what was my", "what were my", "did i do", "did i",
+                    "on", "at", "for", "the", "a"
                 ]
                 for word in noise_words:
-                    clean_q = clean_q.replace(word, "").strip()
+                    # Use regex to match whole words only to avoid eating "monday" -> "mon"
+                    clean_q = re.sub(rf'\b{re.escape(word)}\b', '', clean_q).strip()
                 
                 # Strip distinct prefixes again just in case
                 for prefix in ["show me activities on", "show matches for", "activities on", "what happened on", "records for"]:
@@ -163,14 +166,17 @@ class ContextOptimizer:
                         # Fallback to direct parse just in case
                         parsed = dateparser.parse(clean_q, settings={'PREFER_DATES_FROM': 'past', 'STRICT_PARSING': False})
                 
-                # Fallback: If dateparser fails but we see "yesterday" or "today", force it
+                # Fallback: If dateparser fails but we see relative time phrases
                 if not parsed:
-                    if "yesterday" in clean_q:
-                        print("ContextOptimizer: Fallback triggered for 'yesterday'")
-                        parsed = datetime.now() - timedelta(days=1)
-                    elif "today" in clean_q:
-                        print("ContextOptimizer: Fallback triggered for 'today'")
-                        parsed = datetime.now()
+                    now = datetime.now()
+                    if "this morning" in clean_q or "today" in clean_q:
+                        parsed = now
+                    elif "yesterday" in clean_q:
+                        parsed = now - timedelta(days=1)
+                    elif "a few days ago" in clean_q:
+                        parsed = now - timedelta(days=3)
+                    elif "last week" in clean_q:
+                        parsed = now - timedelta(days=7)
 
                 
                 if parsed:
@@ -301,13 +307,30 @@ class ContextOptimizer:
         full_text = f"{name} {note} {desc}"
         
         # Keywords from query (excluding stop words)
-        stop_words = {'what', 'was', 'the', 'list', 'all', 'segments', 'from', 'at', 'in', 'on', 'my', 'run', 'ride', 'how', 'many', 'activities', 'have', 'been'}
-        query_words = [w for w in self.question.split() if w not in stop_words]
+        stop_words = {'what', 'was', 'the', 'list', 'all', 'segments', 'from', 'at', 'in', 'on', 'my', 'run', 'ride', 'how', 'many', 'activities', 'have', 'been', 'of', 'exactly', 'did', 'do'}
+        question_words = [w.lower() for w in re.findall(r'\w+', self.question)]
+        query_words = [w for w in question_words if w not in stop_words]
         
         for w in query_words:
             if w in full_text:
                 score += 10
-                
+        
+        # Distance matching score
+        dist = activity.get('distance_miles', 0)
+        for w in query_words:
+            if w.replace('.', '', 1).isdigit():
+                try:
+                    target_dist = float(w)
+                    diff = abs(dist - target_dist)
+                    if diff < 0.01:
+                        score += 200 # Exact match priority
+                    elif diff < 0.1:
+                        score += 100 # Near match
+                    elif diff < 0.3:
+                        score += 50
+                except ValueError:
+                    pass
+                    
         return (score, activity.get('start_time', ''))
 
     def filter_by_keyword(self, activities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -331,18 +354,48 @@ class ContextOptimizer:
                     keywords.append(word)
         
         if not keywords:
+            # 3. Aggressive extraction: catch distances (numbers), specific route parts, etc.
+            # Avoid single stop words, but catch numbers and capitalized names
+            words = re.findall(r'\b(?:\d+\.?\d*|[A-Z]\w+)\b', self.question)
+            blacklist = ['The', 'What', 'How', 'List', 'Show', 'This', 'That', 'These', 'Those']
+            for w in words:
+                if w not in blacklist and len(w) >= 1:
+                    keywords.append(w.lower())
+        
+        if not keywords:
             return activities
             
         print(f"ContextOptimizer: Filtering by keywords: {keywords}")
         filtered = []
         for activity in activities:
+            # Include distance and other numeric fields in searchable text
+            dist = activity.get('distance_miles', 0)
+            elev = activity.get('elevation_feet', 0)
+            
             text_content = (
                 str(activity.get('name', '')) + " " + 
                 str(activity.get('private_note', '')) + " " + 
-                str(activity.get('description', ''))
+                str(activity.get('description', '')) + " " +
+                f"{dist} miles {elev} feet"
             ).lower()
             
-            if any(k in text_content for k in keywords):
+            is_match = False
+            for kw in keywords:
+                # Handle numeric matches (e.g. "5" matches "5.02")
+                if kw.isdigit() or (kw.replace('.', '', 1).isdigit() and kw.count('.') <= 1):
+                    try:
+                        f_kw = float(kw)
+                        if abs(dist - f_kw) < 0.2: # 0.2 mile tolerance
+                            is_match = True
+                            break
+                    except ValueError:
+                        pass
+                
+                if kw in text_content:
+                    is_match = True
+                    break
+            
+            if is_match:
                 filtered.append(activity)
                 
         print(f"ContextOptimizer: Keyword filter reduced {len(activities)} to {len(filtered)} activities")
@@ -357,9 +410,27 @@ class ContextOptimizer:
         3. Uses summaries when appropriate
         """
         # Initial context (stats only)
+        # Scrub statistical data of unwanted fields
+        scrubbed_stats = self.stats.copy() if self.stats else {}
+        if 'athlete' in scrubbed_stats: scrubbed_stats.pop('athlete') # Too much detail
+        
         optimized = {
-            "stats": self.stats,
+            "stats": scrubbed_stats,
         }
+        
+        def scrub_activity(act):
+            """Remove fields that encourage bad LLM habits (maps, etc)"""
+            exclude = ['map', 'polyline', 'summary_polyline', 'resource_state', 'external_id', 'upload_id']
+            act_copy = {k: v for k, v in act.items() if k not in exclude}
+            
+            # Scrub map/localhost keywords from any string field
+            for key, val in act_copy.items():
+                if isinstance(val, str) and val:
+                    val = re.sub(r'https?://(?:localhost|127\.0\.0\.1|8001).*?(?=\s|$|\"|\))', '[REMOVED]', val)
+                    val = re.sub(r'View Interactive Map', '[REMOVED]', val)
+                    act_copy[key] = val
+            return act_copy
+
         
         # Determine what level of detail is needed
         date_range = self.parse_date_range()
@@ -382,14 +453,14 @@ class ContextOptimizer:
         has_keywords = len(relevant_activities) < pre_keyword_count
 
         # Check if question explicitly needs a list or specific details
-        needs_list = any(phrase in self.question for phrase in [
-            'list', 'show', 'what did i do', 'details', 'specific', 'names', 'title', 'find', 'search', 'which'
+        needs_list = any(phrase in self.question.lower() for phrase in [
+            'list', 'show', 'what did i do', 'details', 'specific', 'names', 'title', 'find', 'search', 'which', 'what run'
         ])
         
         # Check if question is about aggregates (can use summaries)
-        is_aggregate = any(phrase in self.question for phrase in [
+        is_aggregate = any(phrase in self.question.lower() for phrase in [
             'total', 'sum', 'average', 'compare', 'statistics', 'stats',
-            'how many', 'how much', 'total distance', 'total time', 'count'
+            'how many', 'how much', 'total distance', 'total time', 'count', 'summarize'
         ])
         
         # Strategy: Use summaries for aggregates, details for specific queries
@@ -410,31 +481,33 @@ class ContextOptimizer:
         
         # If within limits, include all relevant activities
         if total_estimated < self.MAX_CONTEXT_TOKENS:
-            optimized["relevant_activities"] = relevant_activities
+            optimized["relevant_activities"] = [scrub_activity(act) for act in relevant_activities]
             optimized["strategy"] = "full_details"
             optimized["activity_count"] = len(relevant_activities)
             optimized["estimated_tokens"] = total_estimated
-            if relevant_activities:
-                # print(f"ContextOptimizer: Full details. First activity sample: {relevant_activities[0]}")
-                pass
-            # NOTE: We intentionally DO NOT include summary_by_year here to avoid conflicting with actual data.
             return optimized
         
         # Too large - need to be smarter
-        # Strategy 1: If asking about specific date, include that date only
-        if 'on' in self.question or 'date' in self.question:
-            # Try to extract specific date
+        # Strategy 1: If asking about a specific day or month, try to tighten the filter
+        month_keywords = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+                         'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+        has_month = any(m in self.question.lower() for m in month_keywords)
+        
+        if has_month or 'on' in self.question.lower() or 'date' in self.question.lower():
             try:
-                parsed_date = dateparser.parse(self.question)
-                if parsed_date:
-                    date_key = parsed_date.strftime("%Y-%m-%d")
+                # Try search_dates as it's more robust for sentences
+                found = search_dates(self.question, settings={'PREFER_DATES_FROM': 'past'})
+                if found:
+                    match_text, date_obj = found[0]
+                    date_key = date_obj.strftime("%Y-%m-%d")
+                    # If it's a specific day, show only that day (high priority)
                     if date_key in self.activities_by_date:
                         optimized["relevant_activities"] = [
-                            {**act, 'date': date_key} 
+                            {**scrub_activity(act), 'date': date_key} 
                             for act in self.activities_by_date[date_key]
                         ]
-                        optimized["strategy"] = "specific_date"
-                        optimized["note"] = f"Showing activities for {date_key} only"
+                        optimized["strategy"] = "tight_date_filter"
+                        optimized["note"] = f"Filtered strictly for {date_key} to stay within limits"
                         return optimized
             except Exception:
                 pass
@@ -455,19 +528,11 @@ class ContextOptimizer:
             
             # Only use this strategy if we can fit a meaningful amount (e.g. at least 50)
             # Otherwise we risk showing a confusingly small slice of history
-            if max_activities > 50:
-                optimized["relevant_activities"] = relevant_activities[:max_activities]
+            # Limit to what we can fit, prioritized by relevance score
+            if max_activities > 0:
+                optimized["relevant_activities"] = [scrub_activity(act) for act in relevant_activities[:max_activities]]
                 optimized["strategy"] = "limited_recent"
-                optimized["note"] = f"Showing {len(optimized['relevant_activities'])} most recent activities (limited by context size)"
-                optimized["total_available"] = len(relevant_activities)
-                
-                # Debug logging for truncation
-                print(f"ContextOptimizer: Truncating context. Showing top {max_activities} of {len(relevant_activities)} activities.")
-                if optimized["relevant_activities"]:
-                    first = optimized["relevant_activities"][0].get('date', 'unknown')
-                    last = optimized["relevant_activities"][-1].get('date', 'unknown')
-                    print(f"ContextOptimizer: Truncated range: {last} to {first}") # Reverse chronological
-                    
+                optimized["note"] = f"Showing {len(optimized['relevant_activities'])} most relevant activities"
                 return optimized
         
         # Strategy 3: Use year summaries + recent activities
@@ -477,8 +542,9 @@ class ContextOptimizer:
         recent_activities = []
         for date_str in sorted_dates[:max_recent_days]:
             for activity in self.activities_by_date[date_str]:
-                activity['date'] = date_str
-                recent_activities.append(activity)
+                activity_copy = scrub_activity(activity)
+                activity_copy['date'] = date_str
+                recent_activities.append(activity_copy)
         
         optimized["relevant_activities"] = recent_activities
         optimized["summary_by_year"] = self.by_year  # Include summary as backup

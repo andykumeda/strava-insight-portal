@@ -24,7 +24,7 @@ class StravaRateLimiter:
     
     # Safety Limits
     LIMIT_15_MIN = 80
-    LIMIT_DAILY = 800
+    LIMIT_DAILY = 950
     
     def __init__(self):
         self.requests_15m: List[float] = []

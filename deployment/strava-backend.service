@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 User=andy
-WorkingDirectory=/var/www/strava-activity-copilot
-EnvironmentFile=/var/www/strava-activity-copilot/backend/.env
-ExecStart=/var/www/strava-activity-copilot/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+WorkingDirectory=/home/andy/Dev/strava-activity-copilot
+EnvironmentFile=/home/andy/Dev/strava-activity-copilot/backend/.env
+ExecStart=/home/andy/Dev/strava-activity-copilot/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 
 [Install]

@@ -183,10 +183,21 @@ class LLMProvider:
         max_tokens: int
     ) -> str:
         """Generate using Gemini API."""
-        full_prompt = f"{system_instruction}\n\n{prompt}"
+        # Clean model name if it has a prefix (OpenRouter style)
+        clean_model = self.model.split("/")[-1] if "/" in self.model else self.model
+        if not clean_model.startswith("gemini-"):
+            clean_model = "gemini-2.0-flash"
+
+        from google.genai import types
+        
         response = await self.client.aio.models.generate_content(
-            model=self.model if self.model.startswith("gemini") else "gemini-2.5-flash",
-            contents=full_prompt,
+            model=clean_model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_output_tokens=max_tokens
+            )
         )
         return response.text
 

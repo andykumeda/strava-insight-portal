@@ -41,13 +41,21 @@ ACTIVITY_CACHE: Dict[str, Dict[str, Any]] = {}
 TOKEN_TO_ID_CACHE: Dict[str, str] = {}
 ATHLETE_LOCKS = defaultdict(asyncio.Lock)
 
+# --- SEGMENT CACHE ---
+# Cache for segment details, efforts, and leaderboards
+# {segment_id: {"details": {...}, "leaderboard": {...}, "efforts": [...], "fetched_at": timestamp}}
+SEGMENT_CACHE: Dict[int, Dict[str, Any]] = {}
+SEGMENT_TTL = 3600 * 24 # 24 hours for segment details (they don't change often)
+SEGMENT_EFFORTS_TTL = 3600 * 1 # 1 hour for efforts/leaderboard
+
 
 # Cache configuration
 CACHE_FILE = "strava_cache.json"
 
 class HydrationRequest(BaseModel):
     ids: List[int]
-CACHE_TTL_SECONDS = 300  # 5 minutes
+CACHE_TTL_SECONDS = 3600  # 1 hour
+STARRED_SEGMENTS_TTL = 3600 * 24 # 24 hours for starred segments list
 
 def format_seconds_to_str(seconds: int) -> str:
     """Format seconds into Xh Ym string."""
@@ -327,10 +335,9 @@ HYDRATION_LOCK = asyncio.Lock()
 
 async def hydrate_activities_background(token: str):
     """Background task to fetch full details for activities."""
-    # Ensure we don't run multiple concurrent hydrations
-    if HYDRATION_LOCK.locked():
-        logger.info("Hydration already in progress. Skipping trigger.")
-        return
+    # TEMPORARILY DISABLED TO CONSERVE API CALLS DURING DEBUGGING
+    logger.info("Background hydration is TEMPORARILY DISABLED.")
+    return
 
     async with HYDRATION_LOCK:
         logger.info("Starting background hydration of activity details...")
@@ -381,19 +388,32 @@ async def hydrate_activities_background(token: str):
 
         logger.info(f"Found {len(candidates)} high-value activities needing hydration.")
         
-        # Priority Scoring
+        # Priority Scoring & Window Filtering
         def priority_score(act):
             score = 0
-            start_date = act.get('start_date', '')
+            start_date_str = act.get('start_date', '')
+            if not start_date_str: return (0, "")
+            
+            # 12-MONTH WINDOW CHECK
+            try:
+                # Strava usually uses ISO format "2023-10-31T01:02:03Z"
+                act_date = datetime.fromisoformat(start_date_str.replace("Z", "+00:00"))
+                # If older than 12 months, give it a massive penalty so it drops out of the candidate list or is processed last
+                # Actually, according to plan, we should just SKIP these candidates entirely below.
+                if (datetime.now(act_date.tzinfo) - act_date).days > 365:
+                    return (-10000, start_date_str)
+            except Exception:
+                pass
+
             atype = act.get('type', '')
             kudos = act.get('kudos_count', 0)
             name = act.get('name', '').lower()
 
             # Tier 1: Recent (Last ~15 months)
             current_year = datetime.now().year
-            if str(current_year) in start_date:
+            if str(current_year) in start_date_str:
                 score += 1000
-            elif str(current_year - 1) in start_date:
+            elif str(current_year - 1) in start_date_str:
                 score += 500
                 
             # Tier 2: Social
@@ -412,9 +432,11 @@ async def hydrate_activities_background(token: str):
             if atype == 'Run':
                 score += 20
                 
-            return (score, start_date)
+            return (score, start_date_str)
         
         candidates.sort(key=priority_score, reverse=True)
+        # Filter out candidates outside the 12-month window (Score < 0)
+        candidates = [c for c in candidates if priority_score(c)[0] >= 0]
         
         # We process candidates in a loop, but we RELEASE the lock during the network call
         # so that other requests (like specific hydration) can interleave.
@@ -426,10 +448,33 @@ async def hydrate_activities_background(token: str):
     hydrated_count = 0
     
     for act in candidates:
-        # STRICT RATE LIMIT CHECK
-        if not rate_limiter.can_request():
-            logger.warning("Rate limit reached during hydration. Stopping background task.")
+        # DYNAMIC THROTTLING
+        stats = rate_limiter.get_stats()
+        used_15m = stats.get("15m_used", 0)
+        limit_15m = stats.get("15m_limit", 80)
+        used_daily = stats.get("daily_used", 0)
+        limit_daily = stats.get("daily_limit", 800)
+        
+        # Priority check: If we are nearing the global or daily limit, slow down or stop
+        # background hydration to leave room for live user queries.
+        sleep_time = 5 
+        
+        # DAILY LIMIT PROTECTION
+        if used_daily > (limit_daily * 0.9): # > 720 calls
+            logger.warning("Daily rate limit nearly reached. Stopping background hydration for the day.")
             break
+            
+        # 15-MINUTE THROTTLING
+        if used_15m > (limit_15m * 0.8): # > 64 calls / 15m 
+            logger.warning("Critical 15m rate limit usage. Pausing background hydration.")
+            break
+        elif used_15m > (limit_15m * 0.6): # > 48 calls / 15m 
+            logger.info("High 15m rate limit usage. Throttling background hydration (20s sleep).")
+            sleep_time = 20 
+        elif used_15m > (limit_15m * 0.4): # > 32 calls / 15m 
+            logger.info("Moderate 15m rate limit usage. Throttling background hydration (10s sleep).")
+            sleep_time = 10 
+
 
         # Check if already hydrated (by another process)
         if "description" in act and act["description"] is not None:
@@ -437,10 +482,10 @@ async def hydrate_activities_background(token: str):
 
         act_id = act['id']
         try:
-            # Rate limit safety: Sleep 2s
-            await asyncio.sleep(2)
+            # Rate limit safety sleep
+            await asyncio.sleep(sleep_time)
             
-            logger.info(f"Hydrating activity {act_id} ({act.get('name')})...")
+            logger.info(f"Hydrating activity {act_id} ({act.get('name')}). Usage: {used_15m}/{limit_15m}")
             
             # NETWORK CALL - NO LOCK
             detail = await make_strava_request(
@@ -622,7 +667,7 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
             activities_by_date[date_key] = []
         
         activity_type = activity.get("sport_type", activity.get("type", "Unknown"))
-        distance_miles = activity.get("distance", 0) * 0.000621371
+        distance_miles = activity.get("distance", 0) / 1609.344 # Official meters per mile for precision
         elevation_feet = activity.get("total_elevation_gain", 0) * 3.28084
         moving_time = activity.get("moving_time", 0)
         
@@ -630,7 +675,7 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
             "id": activity.get("id"),
             "name": activity.get("name", ""),
             "type": activity_type,
-            "distance_miles": round(distance_miles, 2),
+            "distance_miles": round(distance_miles, 3),
             "elevation_feet": round(elevation_feet, 0),
             "moving_time_seconds": moving_time,
             "elapsed_time_seconds": activity.get("elapsed_time", 0),
@@ -690,37 +735,137 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
 
 @app.get("/activities/{activity_id}")
 async def get_activity(activity_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
-    """Get detailed activity data from Strava."""
-    return await make_strava_request(f"{STRAVA_API_BASE_URL}/activities/{activity_id}", access_token=x_strava_token)
+    """Get detailed activity data from Strava, checking cache first."""
+    # 1. Try Cache
+    athlete_id = TOKEN_TO_ID_CACHE.get(x_strava_token)
+    if athlete_id and athlete_id in ACTIVITY_CACHE:
+        acts = ACTIVITY_CACHE[athlete_id].get("activities", [])
+        # Find the activity in the cache
+        for act in acts:
+            if act.get('id') == activity_id:
+                # Check if it has 'description' (sign of hydration)
+                if 'description' in act and act['description'] is not None:
+                    logger.info(f"Cache Hit for detailed activity {activity_id}")
+                    return act
+    
+    # 2. Fetch from API
+    logger.info(f"Cache Miss for detailed activity {activity_id}. Fetching from API.")
+    detail = await make_strava_request(f"{STRAVA_API_BASE_URL}/activities/{activity_id}", access_token=x_strava_token)
+    
+    # 3. Update cache if possible
+    if athlete_id and athlete_id in ACTIVITY_CACHE:
+         acts = ACTIVITY_CACHE[athlete_id].get("activities", [])
+         for i, act in enumerate(acts):
+             if act.get('id') == activity_id:
+                 ACTIVITY_CACHE[athlete_id]["activities"][i].update(detail)
+                 ACTIVITY_CACHE[athlete_id]["activities"][i]["hydrated_at"] = time.time()
+                 save_cache_to_disk()
+                 break
+                 
+    return detail
 
 @app.get("/segments/{segment_id}")
 async def get_segment(segment_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
-    """Get detailed segment data from Strava."""
-    return await make_strava_request(f"{STRAVA_API_BASE_URL}/segments/{segment_id}", access_token=x_strava_token)
+    """Get detailed segment data from Strava, with caching."""
+    cache_entry = SEGMENT_CACHE.get(segment_id)
+    now = time.time()
+    
+    if cache_entry and "details" in cache_entry and (now - cache_entry["fetched_at"]) < SEGMENT_TTL:
+        logger.info(f"Segment Cache Hit: {segment_id}")
+        return cache_entry["details"]
+        
+    logger.info(f"Segment Cache Miss: {segment_id}")
+    details = await make_strava_request(f"{STRAVA_API_BASE_URL}/segments/{segment_id}", access_token=x_strava_token)
+    
+    if segment_id not in SEGMENT_CACHE:
+        SEGMENT_CACHE[segment_id] = {"fetched_at": now}
+    SEGMENT_CACHE[segment_id]["details"] = details
+    SEGMENT_CACHE[segment_id]["fetched_at"] = now
+    
+    return details
 
 @app.get("/segments/{segment_id}/efforts")
 async def get_segment_efforts(segment_id: int, page: int = 1, per_page: int = 50, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> List[Dict[str, Any]]:
-    """Get all efforts for a segment for the authenticated athlete."""
-    return await make_strava_request(
+    """Get all efforts for a segment for the authenticated athlete, with caching."""
+    # Only cache page 1 for simplicity
+    if page == 1:
+        cache_entry = SEGMENT_CACHE.get(segment_id)
+        now = time.time()
+        if cache_entry and "efforts" in cache_entry and (now - cache_entry.get("efforts_fetched_at", 0)) < SEGMENT_EFFORTS_TTL:
+             logger.info(f"Segment Efforts Cache Hit: {segment_id}")
+             return cache_entry["efforts"]
+
+    efforts = await make_strava_request(
         f"{STRAVA_API_BASE_URL}/segment_efforts",
         params={"segment_id": segment_id, "page": page, "per_page": per_page},
         access_token=x_strava_token
     )
+    
+    if page == 1:
+        if segment_id not in SEGMENT_CACHE:
+            SEGMENT_CACHE[segment_id] = {}
+        SEGMENT_CACHE[segment_id]["efforts"] = efforts
+        SEGMENT_CACHE[segment_id]["efforts_fetched_at"] = time.time()
+        
+    return efforts
 
 @app.get("/segments/{segment_id}/leaderboard")
 async def get_segment_leaderboard(segment_id: int, gender: Optional[str] = None, weight_class: Optional[str] = None, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
-    """Get the leaderboard for a segment."""
+    """Get the leaderboard for a segment, with caching."""
+    # Only cache default leaderboard (no filters)
+    if not gender and not weight_class:
+        cache_entry = SEGMENT_CACHE.get(segment_id)
+        now = time.time()
+        if cache_entry and "leaderboard" in cache_entry and (now - cache_entry.get("lb_fetched_at", 0)) < SEGMENT_EFFORTS_TTL:
+             logger.info(f"Segment Leaderboard Cache Hit: {segment_id}")
+             return cache_entry["leaderboard"]
+
     params = {"per_page": 5} # Top 5 is usually enough for CR
     if gender:
         params["gender"] = gender
     if weight_class:
         params["weight_class"] = weight_class
         
-    return await make_strava_request(
+    lb = await make_strava_request(
         f"{STRAVA_API_BASE_URL}/segments/{segment_id}/leaderboard",
         params=params,
         access_token=x_strava_token
     )
+    
+    if not gender and not weight_class:
+        if segment_id not in SEGMENT_CACHE:
+            SEGMENT_CACHE[segment_id] = {}
+        SEGMENT_CACHE[segment_id]["leaderboard"] = lb
+        SEGMENT_CACHE[segment_id]["lb_fetched_at"] = time.time()
+        
+    return lb
+
+@app.get("/segments/starred")
+async def get_starred_segments(page: int = 1, per_page: int = 50, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> List[Dict[str, Any]]:
+    """Get the authenticated athlete's starred segments with caching."""
+    athlete_id = TOKEN_TO_ID_CACHE.get(x_strava_token)
+    
+    # Simple global cache for starred segments (per athlete)
+    # We use a special key in the athlete cache for this
+    if athlete_id and athlete_id in ACTIVITY_CACHE:
+        cache = ACTIVITY_CACHE[athlete_id]
+        now = time.time()
+        if "starred_segments" in cache and (now - cache.get("starred_fetched_at", 0)) < STARRED_SEGMENTS_TTL:
+            logger.info(f"Returning cached starred segments for athlete {athlete_id}")
+            return cache["starred_segments"]
+
+    starred = await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/segments/starred",
+        params={"page": page, "per_page": per_page},
+        access_token=x_strava_token
+    )
+    
+    if athlete_id and athlete_id in ACTIVITY_CACHE:
+        ACTIVITY_CACHE[athlete_id]["starred_segments"] = starred
+        ACTIVITY_CACHE[athlete_id]["starred_fetched_at"] = time.time()
+        save_cache_to_disk()
+        
+    return starred
 
 @app.get("/athlete/stats")
 async def get_athlete_stats(x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:

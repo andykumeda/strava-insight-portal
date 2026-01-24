@@ -1,11 +1,57 @@
 import logging
+import httpx
+import os
 from typing import List
-
 from sqlalchemy.orm import Session
-
 from ..models import Segment, SegmentEffort
 
 logger = logging.getLogger(__name__)
+
+async def sync_starred_segments(token: str, db: Session):
+    """
+    Fetch starred segments from Strava (via MCP) and save to local DB.
+    This enables fuzzy-matching of segment names for users.
+    """
+    mcp_url = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+    logger.info("Syncing starred segments...")
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.get(
+                f"{mcp_url}/segments/starred",
+                headers={"X-Strava-Token": token}
+            )
+            if resp.status_code != 200:
+                logger.error(f"Failed to fetch starred segments: {resp.text}")
+                return
+            
+            starred = resp.json()
+            logger.info(f"Found {len(starred)} starred segments.")
+            
+            for sdata in starred:
+                # Upsert Segment
+                sid = sdata.get("id")
+                segment = db.query(Segment).filter(Segment.id == sid).first()
+                if not segment:
+                    segment = Segment(
+                        id=sid,
+                        name=sdata.get("name"),
+                        distance=sdata.get("distance"),
+                        average_grade=sdata.get("average_grade"),
+                        city=sdata.get("city")
+                    )
+                    db.add(segment)
+                else:
+                    segment.name = sdata.get("name")
+                    segment.distance = sdata.get("distance")
+                    segment.average_grade = sdata.get("average_grade")
+                    segment.city = sdata.get("city")
+            
+            db.commit()
+            logger.info("Starred segments synced successfully.")
+        except Exception as e:
+            logger.error(f"Error syncing starred segments: {e}")
+            db.rollback()
 
 def save_segments_from_activity(activity_data: dict, db: Session):
     if "segment_efforts" not in activity_data:
