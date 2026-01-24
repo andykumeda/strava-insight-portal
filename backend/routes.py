@@ -496,6 +496,13 @@ IMPORTANT INSTRUCTIONS:
     5. **SEGMENTS**: If segments are in the data, list them under `#### Top Segments` as bullet points with links:
        - Format: `- [Segment Name](https://www.strava.com/segments/{segment_id}) - {time}`
        - Example: `- [Big Hill Climb](https://www.strava.com/segments/12345) - 12:30`
+- **SEGMENT EFFORT HISTORY**:
+  - If the data includes `mentioned_segments` with `effort_history`, USE THIS DATA to answer "first time", "last time", or "how many times" questions.
+  - The `effort_history` array contains ALL your attempts on that segment, sorted chronologically.
+  - For "first time" queries: Use the FIRST entry in effort_history (oldest date).
+  - For "last time" queries: Use the LAST entry in effort_history (most recent date).
+  - For "how many times" queries: Count the entries in effort_history.
+  - **CRITICAL**: Do NOT show a random activity - use the specific date from effort_history.
 - **DATA ANALYSIS**: 
   - **DISTANCES**: If you are searching for an "exactly X miles" run, and the data shows X.008 or X.992, you MUST report it as exactly "X.0 miles". Strava UI rounds to 1 decimal place, so match that look.
   - **DATES**: Every activity summary MUST start with the full date (e.g. August 2, 2025).
