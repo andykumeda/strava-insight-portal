@@ -39,6 +39,7 @@ ACTIVITY_CACHE: Dict[str, Dict[str, Any]] = {}
 
 # Cache structure: {token: athlete_id}
 TOKEN_TO_ID_CACHE: Dict[str, str] = {}
+LAST_HYDRATION_TRIGGER = 0  # Timestamp of last background hydration start
 ATHLETE_LOCKS = defaultdict(asyncio.Lock)
 
 # --- SEGMENT CACHE ---
@@ -864,9 +865,9 @@ async def get_starred_segments(page: int = 1, per_page: int = 50, x_strava_token
     return starred
 
 @app.get("/athlete/stats")
-async def get_athlete_stats(x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
+async def get_athlete_stats(x_strava_token: str = Header(..., alias="X-Strava-Token"), background_tasks: BackgroundTasks = None) -> Dict[str, Any]:
     """Get athlete statistics from Strava."""
-    global ACTIVITY_CACHE, TOKEN_TO_ID_CACHE
+    global ACTIVITY_CACHE, TOKEN_TO_ID_CACHE, LAST_HYDRATION_TRIGGER
 
     # 1. Get Athlete ID (Cached)
     athlete_id = TOKEN_TO_ID_CACHE.get(x_strava_token)
@@ -885,11 +886,24 @@ async def get_athlete_stats(x_strava_token: str = Header(..., alias="X-Strava-To
              acts = ACTIVITY_CACHE[athlete_id].get("activities", [])
              total = len(acts)
              hydrated = sum(1 for a in acts if a.get("hydrated_at"))
+             percent = round(hydrated / total * 100 if total else 0, 1)
              stats_dict["app_status"] = {
                  "synced_activities": total,
                  "enriched_activities": hydrated,
-                 "percent": round(hydrated / total * 100 if total else 0, 1)
+                 "percent": percent
              }
+             
+             # AUTO-TRIGGER HYDRATION CHECK
+             # If not 100% and we haven't triggered recently (5 mins), kick off background hydration
+             global LAST_HYDRATION_TRIGGER
+             if percent < 100 and (time.time() - LAST_HYDRATION_TRIGGER) > 300:
+                 if background_tasks:
+                     logger.info(f"Auto-triggering background hydration (Progress: {percent}%)")
+                     background_tasks.add_task(hydrate_activities_background, x_strava_token)
+                     LAST_HYDRATION_TRIGGER = time.time()
+                 else:
+                     logger.warning("Cannot auto-trigger hydration: BackgroundTasks not available")
+
         return stats_dict
 
     if athlete_id in ACTIVITY_CACHE:
