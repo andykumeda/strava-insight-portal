@@ -2,6 +2,7 @@ import time
 import json
 import os
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
@@ -58,10 +59,17 @@ class StravaRateLimiter:
     def _cleanup(self):
         """Remove timestamps older than the windows."""
         now = time.time()
-        # 15 minutes = 900 seconds
+        # 15 minutes = 900 seconds (sliding window is fine for 15m safety)
         self.requests_15m = [t for t in self.requests_15m if now - t < 900]
-        # 1 day = 86400 seconds
-        self.requests_daily = [t for t in self.requests_daily if now - t < 86400]
+        
+        # Daily Limit: Strava resets at midnight UTC.
+        # We only keep timestamps from the CURRENT UTC day.
+        today_utc = datetime.now(timezone.utc).date()
+        self.requests_daily = [
+            t for t in self.requests_daily 
+            if datetime.fromtimestamp(t, timezone.utc).date() == today_utc
+        ]
+
 
     def can_request(self) -> bool:
         """Check if a request is allowed. Reloads state from disk first."""
