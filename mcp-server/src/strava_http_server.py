@@ -893,16 +893,19 @@ async def get_athlete_stats(x_strava_token: str = Header(..., alias="X-Strava-To
                  "percent": percent
              }
              
-             # AUTO-TRIGGER HYDRATION CHECK
-             # If not 100% and we haven't triggered recently (5 mins), kick off background hydration
-             global LAST_HYDRATION_TRIGGER
-             if percent < 100 and (time.time() - LAST_HYDRATION_TRIGGER) > 300:
-                 if background_tasks:
-                     logger.info(f"Auto-triggering background hydration (Progress: {percent}%)")
-                     background_tasks.add_task(hydrate_activities_background, x_strava_token)
-                     LAST_HYDRATION_TRIGGER = time.time()
-                 else:
-                     logger.warning("Cannot auto-trigger hydration: BackgroundTasks not available")
+             # AUTO-TRIGGER HYDRATION CHECK (DISABLED for multi-user quota fairness)
+             # Background hydration consumed the entire 15m quota, blocking interactive queries.
+             # Activity details are now fetched on-demand only when a user queries for them.
+             # To re-enable, uncomment the block below.
+             #
+             # global LAST_HYDRATION_TRIGGER
+             # if percent < 100 and (time.time() - LAST_HYDRATION_TRIGGER) > 300:
+             #     if background_tasks:
+             #         logger.info(f"Auto-triggering background hydration (Progress: {percent}%)")
+             #         background_tasks.add_task(hydrate_activities_background, x_strava_token)
+             #         LAST_HYDRATION_TRIGGER = time.time()
+             #     else:
+             #         logger.warning("Cannot auto-trigger hydration: BackgroundTasks not available")
 
         return stats_dict
 

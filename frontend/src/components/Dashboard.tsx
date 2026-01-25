@@ -216,10 +216,15 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
                     {loading && (
                         <div className="flex justify-start">
-                            <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 px-6 py-4 rounded-2xl rounded-bl-none shadow-sm flex items-center gap-2 transition-colors duration-200">
-                                <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" />
-                                <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce delay-100" />
-                                <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce delay-200" />
+                            <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 px-6 py-4 rounded-2xl rounded-bl-none shadow-sm transition-colors duration-200">
+                                <div className="flex items-center gap-3">
+                                    <div className="flex items-center gap-1">
+                                        <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" />
+                                        <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce delay-100" />
+                                        <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce delay-200" />
+                                    </div>
+                                    <span className="text-sm text-gray-500 dark:text-gray-400">Fetching activity details... this may take a moment.</span>
+                                </div>
                             </div>
                         </div>
                     )}

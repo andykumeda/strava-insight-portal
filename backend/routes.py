@@ -215,12 +215,26 @@ async def query_strava_data(
         # 3. Optimize Context - Smart filtering to prevent context limits and minimize costs
         # 3. Optimize Context - Smart filtering to prevent context limits and minimize costs
         try:
-            optimizer = ContextOptimizer(
-                question=query.question,
-                activity_summary=activity_summary_data,
-                stats=stats_data
-            )
+            # OPTIMIZE CONTEXT for the LLM
+            # This reduces token usage and focuses the AI on relevant data.
+            from .context_optimizer import ContextOptimizer
+            
+            # Trigger on-demand sync for recency queries
+            recency_triggers = ['today', 'yesterday', 'this morning', 'just now', 'last night']
+            if any(t in query.question.lower() for t in recency_triggers):
+                logger.info("Recency query detected. Triggering on-demand activity refresh...")
+                try:
+                    # 2-second timeout for a quick refresh check
+                    async with httpx.AsyncClient(timeout=2.0) as ref_client:
+                        await ref_client.post(f"{MCP_SERVER_URL}/activities/refresh", headers=headers)
+                        # Small sleep to allow the background task to at least start/fetch page 1
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"On-demand refresh failed (ignoring): {e}")
+
+            optimizer = ContextOptimizer(query.question, activity_summary_data, stats_data)
             optimized_context = optimizer.optimize_context()
+
             
             # --- HYDRATION STRATEGY ---
             # We skip the "on-demand hydration" block here because we will perform
@@ -543,7 +557,18 @@ async def query_strava_data(
             }
         
         # System instructions (reduces token cost, can be cached)
-        system_instruction = """You are a helpful assistant analyzing Strava fitness data. You MUST strictly follow the MANDATORY OUTPUT RULES provided in the user prompt.
+        from datetime import datetime
+        current_date_str = datetime.now().strftime("%B %d, %Y")
+        
+        system_instruction = f"""You are Antigravity, an elite Strava Activity Copilot.
+Today is {current_date_str}.
+
+- **CONTEXT AWARENESS**:
+  - Always respect the current date: {current_date_str}.
+  - If a user asks about "today" or "yesterday", look for activities specifically on those dates.
+  - **CRITICAL**: If the provided DATA does not contain any activities for the requested date or name, DO NOT guess or show unrelated activities. Instead, state: "I don't see any activities in your history for [Date/Name]. Try syncing your latest data."
+
+You MUST strictly follow the MANDATORY OUTPUT RULES provided in the user prompt.
 
 IMPORTANT INSTRUCTIONS:
 - **DATA FIELDS**: The activity data provided uses specific field names:

@@ -331,6 +331,19 @@ class ContextOptimizer:
                 except ValueError:
                     pass
                     
+        # Recency Match (Critical for "my run today")
+        try:
+            start_str = activity.get('start_date', '') or activity.get('start_time', '')
+            if start_str:
+                act_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                now = datetime.now(act_dt.tzinfo)
+                delta = now - act_dt
+                if delta.total_seconds() < 86400: # Last 24 hours
+                    score += 1000 # Absolute Priority
+                elif delta.days < 7:
+                    score += 100 # This week
+        except Exception: pass
+                    
         return (score, activity.get('start_time', ''))
 
     def filter_by_keyword(self, activities: List[Dict[str, Any]], date_range_applied: bool = False) -> List[Dict[str, Any]]:
