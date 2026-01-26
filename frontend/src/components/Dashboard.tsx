@@ -1,13 +1,61 @@
-import React, { useState, useEffect } from 'react';
-import { Send, User as UserIcon, Activity, RefreshCw } from 'lucide-react';
+import React, { useState } from 'react';
+import { Send, User as UserIcon, Activity, HelpCircle, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import type { User, Message } from '../types';
 import { API_ENDPOINTS } from '../config';
-import ThemeToggle from './ThemeToggle'; // Import ThemeToggle
+import ThemeToggle from './ThemeToggle';
 
 interface DashboardProps {
     user: User;
 }
+
+// Example queries organized by category
+const EXAMPLE_QUERIES = [
+    {
+        category: "📊 Statistics & Trends",
+        queries: [
+            "What was my weekly mileage for the last 4 weeks?",
+            "Compare my running pace this year vs last year.",
+            "What's my average distance per run this month?",
+            "Show my monthly running summary for 2025."
+        ]
+    },
+    {
+        category: "🏃 Recent Activities",
+        queries: [
+            "What segments were in my run yesterday?",
+            "Summarize my activities from the past week.",
+            "What was my longest run this month?",
+            "Show my run from 3 days ago."
+        ]
+    },
+    {
+        category: "🏆 Personal Records & Firsts",
+        queries: [
+            "When was the first time I ran 10 miles?",
+            "What's my fastest 5K pace ever?",
+            "What was my longest ride this year?",
+            "When did I first complete the Rose Bowl loop?"
+        ]
+    },
+    {
+        category: "🗺️ Segments & Routes",
+        queries: [
+            "What's my fastest time on [Segment Name]?",
+            "How many times have I run [Segment Name]?",
+            "Show segments from my morning run today.",
+            "List my starred segments."
+        ]
+    },
+    {
+        category: "📈 Comparisons",
+        queries: [
+            "Compare my January 2025 to January 2024.",
+            "How does my cycling this year compare to last year?",
+            "What's my elevation gain this month vs last month?"
+        ]
+    }
+];
 
 const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     const [input, setInput] = useState('');
@@ -15,34 +63,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     const [loading, setLoading] = useState(false);
     const [history, setHistory] = useState<string[]>([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
-    const [syncStats, setSyncStats] = useState<{ synced: number, enriched: number, percent: number } | null>(null);
-
-    useEffect(() => {
-        const fetchStatus = async () => {
-            try {
-                const res = await fetch(API_ENDPOINTS.STATUS, { credentials: 'include' });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.status === 'online' && data.sync) {
-                        setSyncStats({
-                            synced: data.sync.synced_activities,
-                            enriched: data.sync.enriched_activities,
-                            percent: data.sync.percent
-                        });
-                    }
-                }
-            } catch (e) {
-                console.error("Status check failed", e);
-            }
-        };
-
-        // Initial fetch
-        fetchStatus();
-
-        // Poll every 10 seconds to keep updated during hydration
-        const interval = setInterval(fetchStatus, 10000);
-        return () => clearInterval(interval);
-    }, []);
+    const [showHelp, setShowHelp] = useState(false);
 
     const submitQuestion = async (text: string) => {
         if (!text.trim()) return;
@@ -62,6 +83,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         };
         setMessages(prev => [...prev, userMsg]);
         setLoading(true);
+        setShowHelp(false); // Close help modal when submitting
 
         try {
             const res = await fetch(API_ENDPOINTS.QUERY, {
@@ -146,12 +168,15 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                     <h1 className="text-xl font-bold text-gray-800 dark:text-white">ActivityCopilot</h1>
                 </div>
                 <div className="flex items-center gap-4">
-                    {syncStats && (
-                        <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2.5 py-1.5 rounded-full" title={`${syncStats.enriched} / ${syncStats.synced} activities enriched`}>
-                            <RefreshCw className={`w-3 h-3 ${syncStats.percent < 100 ? 'animate-spin' : ''}`} />
-                            <span className="font-medium">{syncStats.percent}% Synced</span>
-                        </div>
-                    )}
+                    {/* Help Button */}
+                    <button
+                        onClick={() => setShowHelp(true)}
+                        className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2.5 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                        title="View example queries"
+                    >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span className="font-medium">Help</span>
+                    </button>
                     <ThemeToggle />
                     <div className="flex items-center gap-2">
                         {user.profile_picture ? (
@@ -165,6 +190,51 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                     </div>
                 </div>
             </header>
+
+            {/* Help Modal */}
+            {showHelp && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+                        <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
+                            <h2 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                                <HelpCircle className="w-5 h-5 text-orange-600" />
+                                Example Queries
+                            </h2>
+                            <button
+                                onClick={() => setShowHelp(false)}
+                                className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                            >
+                                <X className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+                            </button>
+                        </div>
+                        <div className="p-4 overflow-y-auto max-h-[60vh]">
+                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                                Click any example to try it, or use these as inspiration for your own questions.
+                            </p>
+                            {EXAMPLE_QUERIES.map((category, idx) => (
+                                <div key={idx} className="mb-6">
+                                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                                        {category.category}
+                                    </h3>
+                                    <div className="grid grid-cols-1 gap-2">
+                                        {category.queries.map((query, qIdx) => (
+                                            <button
+                                                key={qIdx}
+                                                onClick={() => {
+                                                    submitQuestion(query);
+                                                }}
+                                                className="text-left p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border dark:border-gray-600 hover:border-orange-500 hover:bg-orange-50 dark:hover:bg-gray-700 transition-all text-sm text-gray-700 dark:text-gray-200"
+                                            >
+                                                "{query}"
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Chat Area */}
             <div className="flex-1 overflow-y-auto p-4 md:p-8">
@@ -181,6 +251,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                                     "Compare my running pace this year vs last year."
                                 </button>
                             </div>
+                            <button
+                                onClick={() => setShowHelp(true)}
+                                className="mt-6 text-sm text-orange-600 dark:text-orange-400 hover:underline"
+                            >
+                                View more example queries →
+                            </button>
                         </div>
                     )}
 
