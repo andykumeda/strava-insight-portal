@@ -479,7 +479,8 @@ async def query_strava_data(
                                     'segments': [
                                         {
                                             'name': s.get('name'), 
-                                            'elapsed_time': f"{int(s.get('elapsed_time', 0)) // 60}:{int(s.get('elapsed_time', 0)) % 60:02d}",
+                                            # Format segment time: Use h:mm:ss if >= 1 hour, else m:ss
+                                            'elapsed_time': (lambda t: f"{int(t)//3600}:{int(t)%3600//60:02d}:{int(t)%60:02d}" if int(t) >= 3600 else f"{int(t)//60}:{int(t)%60:02d}")(int(s.get('elapsed_time', 0))),
                                             'id': s.get('segment', {}).get('id')
                                         } 
                                         for s in detailed_data.get('segment_efforts', [])[:15]
