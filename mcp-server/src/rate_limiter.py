@@ -23,8 +23,9 @@ class StravaRateLimiter:
     
     STATE_FILE = "rate_limit_state.json"
     
-    # Safety Limits (Stricter: 80% of 100/15m and 80% of 1000/day)
-    LIMIT_15_MIN = 80
+    # Safety Limits (Strava official: 100/15m, 1000/day)
+    # Using full 100/15m since we now use on-demand enrichment only
+    LIMIT_15_MIN = 100
     LIMIT_DAILY = 800
     
     def __init__(self):

@@ -219,18 +219,17 @@ async def query_strava_data(
             # This reduces token usage and focuses the AI on relevant data.
             from .context_optimizer import ContextOptimizer
             
-            # Trigger on-demand sync for recency queries
-            recency_triggers = ['today', 'yesterday', 'this morning', 'just now', 'last night']
-            if any(t in query.question.lower() for t in recency_triggers):
-                logger.info("Recency query detected. Triggering on-demand activity refresh...")
-                try:
-                    # 2-second timeout for a quick refresh check
-                    async with httpx.AsyncClient(timeout=2.0) as ref_client:
-                        await ref_client.post(f"{MCP_SERVER_URL}/activities/refresh", headers=headers)
-                        # Small sleep to allow the background task to at least start/fetch page 1
-                        await asyncio.sleep(0.5)
-                except Exception as e:
-                    logger.warning(f"On-demand refresh failed (ignoring): {e}")
+            # On-demand refresh DISABLED - it re-fetches the entire activity list (25+ API calls)
+            # which is too expensive. The activity list is cached and sufficient.
+            # recency_triggers = ['today', 'yesterday', 'this morning', 'just now', 'last night']
+            # if any(t in query.question.lower() for t in recency_triggers):
+            #     logger.info("Recency query detected. Triggering on-demand activity refresh...")
+            #     try:
+            #         async with httpx.AsyncClient(timeout=2.0) as ref_client:
+            #             await ref_client.post(f"{MCP_SERVER_URL}/activities/refresh", headers=headers)
+            #             await asyncio.sleep(0.5)
+            #     except Exception as e:
+            #         logger.warning(f"On-demand refresh failed (ignoring): {e}")
 
             optimizer = ContextOptimizer(query.question, activity_summary_data, stats_data)
             optimized_context = optimizer.optimize_context()
@@ -588,19 +587,19 @@ IMPORTANT INSTRUCTIONS:
 
 - **LINKING & FORMATTING**:
   - **ACTIVITY STRUCTURE**: 
-    1. Start with the Activity Name as a Heading 3 link: `### [Activity Name](https://www.strava.com/activities/{id})`
-    2. Follow with the Date: `**Date**: {date}` (MANDATORY)
+    1. Start with the Activity Name as a Heading 3 link: `### [Activity Name](https://www.strava.com/activities/{{id}})`
+    2. Follow with the Date: `**Date**: {{date}}` (MANDATORY)
     3. Follow with stats: `- **Distance**: 5.2 miles`, etc.
     4. **MAP LINK**: DO NOT INCLUDE ANY MAP LINKS.
     5. **SEGMENTS**: If segments are in the data, list them under `#### Top Segments` as bullet points with links:
-       - Format: `- [Segment Name](https://www.strava.com/segments/{segment_id}) - {time}`
+       - Format: `- [Segment Name](https://www.strava.com/segments/{{segment_id}}) - {{time}}`
        - Example: `- [Big Hill Climb](https://www.strava.com/segments/12345) - 12:30`
 - **SEGMENT EFFORT HISTORY**:
   - If the data includes `mentioned_segments` with `effort_history`, USE THIS DATA to answer "first time", "last time", or "how many times" questions.
   - The `effort_history` array contains ALL your attempts on that segment, sorted chronologically.
   - For "first time" queries: Use the FIRST entry in effort_history (oldest date).
   - For "last time" queries: Use the LAST entry in effort_history (most recent date).
-  - Each effort includes `activity_id` - use this to create activity links: `https://www.strava.com/activities/{activity_id}`
+  - Each effort includes `activity_id` - use this to create activity links: `https://www.strava.com/activities/{{activity_id}}`
   - For "how many times" queries: Count the entries in effort_history.
   - **CRITICAL**: Do NOT show a random activity - use the specific date from effort_history.
 - **DATA ANALYSIS**: 
@@ -621,7 +620,7 @@ IMPORTANT INSTRUCTIONS:
         
         user_prompt = f"""### MANDATORY OUTPUT RULES:
 1. **DATES**: Every activity summary MUST start with the human-readable date (e.g., "August 2, 2025").
-2. **ACTIVITY TITLES**: Always link activity names as Heading 3: `### [Activity Name](https://www.strava.com/activities/{id})`
+2. **ACTIVITY TITLES**: Always link activity names as Heading 3: `### [Activity Name](https://www.strava.com/activities/{{id}})`
 3. **SEGMENTS**: List segments under `#### Top Segments`. If no segments are in the data, state "No segments found".
 4. **DISTANCE DISPLAY**: For "exactly" queries, round to 1 decimal place (e.g. "5.0 miles") if the data is within 0.05 miles of the target.
 5. **GPX DOWNLOAD**: If the user asks to export/download a route as GPX, provide a download link: `[Download GPX File](/api/routes/{{route_id}}/gpx)`
@@ -718,8 +717,9 @@ Answer the user's question following the MANDATORY RULES above.
         raise he
     except Exception as e:
         import traceback
-        pass
-        raise HTTPException(status_code=500, detail="Internal Server Error detected in route handler.")
+        error_trace = traceback.format_exc()
+        logger.error(f"Query handler CRASH: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @router.get("/activities/{activity_id}/map")
 async def get_activity_map(

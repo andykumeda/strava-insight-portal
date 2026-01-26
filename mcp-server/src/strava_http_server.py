@@ -197,6 +197,119 @@ async def get_recent_activities(limit: int = 200, page: int = 1, x_strava_token:
         access_token=x_strava_token
     )
 
+@app.get("/activities/search")
+async def search_activities_optimized(
+    x_strava_token: str = Header(..., alias="X-Strava-Token"),
+    oldest_first: bool = False,
+    max_pages: int = 25,
+    search_name: Optional[str] = None,
+    min_distance_meters: Optional[float] = None,
+    max_distance_meters: Optional[float] = None,
+    activity_type: Optional[str] = None,
+    after_date: Optional[str] = None,
+    before_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Search activities with optimized fetching strategy.
+    
+    - oldest_first: If True, fetches oldest activities first using 'after' param.
+                    Use this for 'first time I did X' queries to enable early stopping.
+    - max_pages: Maximum pages to fetch (default 25 = ~5000 activities)
+    - search_name: Filter by activity name (case-insensitive substring match)
+    - min_distance_meters/max_distance_meters: Filter by distance range
+    - activity_type: Filter by type (Run, Ride, Swim, etc.)
+    - after_date/before_date: Date range filter (YYYY-MM-DD format)
+    
+    Returns: {activities: [...], pages_fetched: int, early_stopped: bool, total_found: int}
+    """
+    import datetime
+    
+    all_matches = []
+    page = 1
+    early_stopped = False
+    
+    # For oldest-first, use 'after' param with timestamp from year 2000
+    # This reverses the sort order to chronological (oldest first)
+    base_params = {"per_page": 200}
+    
+    if oldest_first:
+        # Unix timestamp for Jan 1, 2000 = 946684800
+        base_params["after"] = 946684800
+    
+    # Add date filters if provided
+    if after_date:
+        try:
+            dt = datetime.datetime.strptime(after_date, "%Y-%m-%d")
+            base_params["after"] = int(dt.timestamp())
+        except ValueError:
+            pass
+    
+    if before_date:
+        try:
+            dt = datetime.datetime.strptime(before_date, "%Y-%m-%d")
+            base_params["before"] = int(dt.timestamp())
+        except ValueError:
+            pass
+    
+    while page <= max_pages:
+        params = {**base_params, "page": page}
+        logger.info(f"Search: Fetching page {page}, oldest_first={oldest_first}")
+        
+        try:
+            activities = await make_strava_request(
+                f"{STRAVA_API_BASE_URL}/athlete/activities",
+                params=params,
+                access_token=x_strava_token
+            )
+        except Exception as e:
+            logger.warning(f"Search stopped at page {page}: {e}")
+            break
+        
+        if not activities:
+            break
+        
+        # Filter activities
+        for act in activities:
+            match = True
+            
+            if search_name and search_name.lower() not in act.get("name", "").lower():
+                match = False
+            
+            if activity_type and act.get("type", "").lower() != activity_type.lower():
+                match = False
+            
+            dist = act.get("distance", 0)
+            if min_distance_meters and dist < min_distance_meters:
+                match = False
+            if max_distance_meters and dist > max_distance_meters:
+                match = False
+            
+            if match:
+                all_matches.append(act)
+                
+                # For oldest-first "first occurrence" queries, we can stop early
+                # after finding the first match (user can specify via max results)
+                if oldest_first and len(all_matches) >= 1:
+                    early_stopped = True
+                    break
+        
+        if early_stopped:
+            break
+            
+        if len(activities) < 200:
+            # Last page reached
+            break
+            
+        page += 1
+    
+    return {
+        "activities": all_matches,
+        "pages_fetched": page,
+        "early_stopped": early_stopped,
+        "total_found": len(all_matches),
+        "strategy": "oldest_first" if oldest_first else "newest_first"
+    }
+
 async def _fetch_all_activities_logic(x_strava_token: str, refresh: bool) -> List[Dict[str, Any]]:
     """Core logic to fetch all activities, separated for background reuse."""
     global ACTIVITY_CACHE, TOKEN_TO_ID_CACHE
@@ -313,16 +426,16 @@ async def _fetch_all_activities_logic(x_strava_token: str, refresh: bool) -> Lis
     
     logger.info(f"Fetched and cached {len(all_activities)} total activities for athlete {athlete_id}")
     
-    # Trigger background hydration automatically
-    # Use create_task to fire and forget
-    try:
-        if not HYDRATION_LOCK.locked():
-             logger.info("Triggering automatic background hydration...")
-             asyncio.create_task(hydrate_activities_background(x_strava_token))
-        else:
-             logger.info("Hydration already in progress.")
-    except Exception:
-        pass # Don't block
+    # Background hydration DISABLED for multi-user quota fairness.
+    # Activity details are now fetched only on-demand when a user queries for them.
+    # try:
+    #     if not HYDRATION_LOCK.locked():
+    #          logger.info("Triggering automatic background hydration...")
+    #          asyncio.create_task(hydrate_activities_background(x_strava_token))
+    #     else:
+    #          logger.info("Hydration already in progress.")
+    # except Exception:
+    #     pass # Don't block
         
     return all_activities
 
@@ -523,7 +636,7 @@ async def hydrate_activities_background(token: str):
 
 @app.post("/activities/refresh")
 async def refresh_activities(x_strava_token: str = Header(..., alias="X-Strava-Token"), background_tasks: BackgroundTasks = None):
-    """Trigger a background refresh of the activity cache."""
+    """Trigger a background refresh of the activity cache (list only, no hydration)."""
     
     async def _do_refresh(token):
         logger.info("Starting background activity refresh...")
@@ -532,8 +645,9 @@ async def refresh_activities(x_strava_token: str = Header(..., alias="X-Strava-T
             await _fetch_all_activities_logic(token, refresh=True)
             logger.info("Background refresh complete.")
             
-            # 2. Trigger Hydration
-            asyncio.create_task(hydrate_activities_background(token))
+            # 2. Hydration DISABLED for multi-user quota fairness
+            # Activity details are now fetched only on-demand when a user queries for them.
+            # asyncio.create_task(hydrate_activities_background(token))
 
         except Exception as e:
             logger.error(f"Background refresh failed: {e}")
@@ -620,12 +734,11 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
     # Get all activities (will use cache if available)
     all_activities = await get_all_activities(x_strava_token)
     
-    # Trigger background hydration logic
-    # This ensures that even if we hit cache, we verify if hydration is needed
-    try:
-         asyncio.create_task(hydrate_activities_background(x_strava_token))
-    except Exception:
-         pass
+    # Background hydration DISABLED for multi-user quota fairness.
+    # try:
+    #      asyncio.create_task(hydrate_activities_background(x_strava_token))
+    # except Exception:
+    #      pass
     
     # Group activities by year and month
     by_year: Dict[str, Dict[str, Any]] = {}
@@ -989,6 +1102,229 @@ async def get_activity_with_map(activity_id: int, format: str = 'html', x_strava
     except Exception as e:
         logger.error(f"Error processing activity {activity_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# ADDITIONAL ENDPOINTS FOR FEATURE PARITY
+# ============================================================================
+
+@app.get("/activities/{activity_id}/streams")
+async def get_activity_streams(
+    activity_id: int, 
+    keys: str = "time,distance,latlng,altitude,velocity_smooth,heartrate,cadence,watts,temp,moving,grade_smooth",
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> Dict[str, Any]:
+    """Get activity streams (time-series data like heart rate, GPS, etc)."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/activities/{activity_id}/streams",
+        params={"keys": keys, "key_by_type": True},
+        access_token=x_strava_token
+    )
+
+@app.get("/activities/{activity_id}/laps")
+async def get_activity_laps(activity_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> List[Dict[str, Any]]:
+    """Get laps for an activity."""
+    return await make_strava_request(f"{STRAVA_API_BASE_URL}/activities/{activity_id}/laps", access_token=x_strava_token)
+
+@app.get("/activities/{activity_id}/comments")
+async def get_activity_comments(
+    activity_id: int, page: int = 1, per_page: int = 30,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get comments for an activity."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/activities/{activity_id}/comments",
+        params={"page": page, "per_page": per_page},
+        access_token=x_strava_token
+    )
+
+@app.get("/activities/{activity_id}/kudos")
+async def get_activity_kudoers(
+    activity_id: int, page: int = 1, per_page: int = 30,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get kudoers for an activity."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/activities/{activity_id}/kudos",
+        params={"page": page, "per_page": per_page},
+        access_token=x_strava_token
+    )
+
+@app.get("/athlete/zones")
+async def get_athlete_zones(x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
+    """Get athlete heart rate and power zones."""
+    return await make_strava_request(f"{STRAVA_API_BASE_URL}/athlete/zones", access_token=x_strava_token)
+
+@app.get("/clubs/{club_id}")
+async def get_club(club_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
+    """Get club details."""
+    return await make_strava_request(f"{STRAVA_API_BASE_URL}/clubs/{club_id}", access_token=x_strava_token)
+
+@app.get("/clubs/{club_id}/activities")
+async def get_club_activities(
+    club_id: int, page: int = 1, per_page: int = 30,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get activities from a club."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/clubs/{club_id}/activities",
+        params={"page": page, "per_page": per_page},
+        access_token=x_strava_token
+    )
+
+@app.get("/clubs/{club_id}/members")
+async def get_club_members(
+    club_id: int, page: int = 1, per_page: int = 30,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get members of a club."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/clubs/{club_id}/members",
+        params={"page": page, "per_page": per_page},
+        access_token=x_strava_token
+    )
+
+@app.get("/clubs/{club_id}/admins")
+async def get_club_admins(
+    club_id: int, page: int = 1, per_page: int = 30,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get administrators of a club."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/clubs/{club_id}/admins",
+        params={"page": page, "per_page": per_page},
+        access_token=x_strava_token
+    )
+
+@app.get("/routes/{route_id}")
+async def get_route(route_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
+    """Get route details."""
+    return await make_strava_request(f"{STRAVA_API_BASE_URL}/routes/{route_id}", access_token=x_strava_token)
+
+@app.get("/routes/{route_id}/streams")
+async def get_route_streams(route_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> List[Dict[str, Any]]:
+    """Get route streams (GPS coordinates, elevation, etc)."""
+    return await make_strava_request(f"{STRAVA_API_BASE_URL}/routes/{route_id}/streams", access_token=x_strava_token)
+
+@app.get("/routes/{route_id}/export_tcx")
+async def get_route_tcx(route_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")):
+    """Export route as TCX file."""
+    tcx_content = await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/routes/{route_id}/export_tcx",
+        access_token=x_strava_token,
+        response_type="content"
+    )
+    return Response(
+        content=tcx_content,
+        media_type="application/vnd.garmin.tcx+xml",
+        headers={"Content-Disposition": f"attachment; filename=route_{route_id}.tcx"}
+    )
+
+@app.get("/segments/{segment_id}/streams")
+async def get_segment_streams(
+    segment_id: int,
+    keys: str = "distance,latlng,altitude",
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get segment streams."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/segments/{segment_id}/streams",
+        params={"keys": keys, "key_by_type": True},
+        access_token=x_strava_token
+    )
+
+@app.get("/segment_efforts/{effort_id}/streams")
+async def get_segment_effort_streams(
+    effort_id: int,
+    keys: str = "distance,latlng,altitude,velocity_smooth,heartrate,cadence,watts,grade_smooth,moving",
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Get segment effort streams."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/segment_efforts/{effort_id}/streams",
+        params={"keys": keys, "key_by_type": True},
+        access_token=x_strava_token
+    )
+
+@app.put("/segments/{segment_id}/starred")
+async def star_segment(
+    segment_id: int,
+    starred: bool = True,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> Dict[str, Any]:
+    """Star or unstar a segment."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/segments/{segment_id}/starred",
+        method="PUT",
+        params={"starred": starred},
+        access_token=x_strava_token
+    )
+
+@app.post("/activities")
+async def create_activity(
+    name: str,
+    sport_type: str,
+    start_date_local: str,
+    elapsed_time: int,
+    description: str = "",
+    distance: float = 0,
+    trainer: int = 0,
+    commute: int = 0,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> Dict[str, Any]:
+    """Create a manual activity."""
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/activities",
+        method="POST",
+        params={
+            "name": name,
+            "sport_type": sport_type,
+            "start_date_local": start_date_local,
+            "elapsed_time": elapsed_time,
+            "description": description,
+            "distance": distance,
+            "trainer": trainer,
+            "commute": commute
+        },
+        access_token=x_strava_token
+    )
+
+@app.put("/activities/{activity_id}")
+async def update_activity(
+    activity_id: int,
+    name: Optional[str] = None,
+    sport_type: Optional[str] = None,
+    description: Optional[str] = None,
+    trainer: Optional[int] = None,
+    commute: Optional[int] = None,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> Dict[str, Any]:
+    """Update an existing activity."""
+    params = {k: v for k, v in {
+        "name": name, "sport_type": sport_type, "description": description,
+        "trainer": trainer, "commute": commute
+    }.items() if v is not None}
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/activities/{activity_id}",
+        method="PUT",
+        params=params,
+        access_token=x_strava_token
+    )
+
+@app.put("/athlete")
+async def update_athlete(
+    weight: Optional[float] = None,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> Dict[str, Any]:
+    """Update athlete information."""
+    params = {}
+    if weight is not None:
+        params["weight"] = weight
+    return await make_strava_request(
+        f"{STRAVA_API_BASE_URL}/athlete",
+        method="PUT",
+        params=params,
+        access_token=x_strava_token
+    )
 
 def main() -> None:
     """Main entry point for the server."""
