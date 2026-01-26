@@ -242,22 +242,22 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
             {/* Chat Area */}
             <div className="flex-1 overflow-y-auto p-4 md:p-8">
-                <div className="max-w-3xl mx-auto space-y-6">
+                <div className="max-w-3xl mx-auto space-y-4 sm:space-y-6">
                     {messages.length === 0 && (
-                        <div className="text-center py-10">
-                            <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">Welcome, {user.name}!</h2>
-                            <p className="text-gray-600 dark:text-gray-400 mb-8">Ask me anything about your Strava activities.</p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
-                                <button onClick={() => submitQuestion("What was my weekly mileage for the last 4 weeks?")} className="p-4 bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 hover:border-orange-500 hover:shadow-sm transition-all text-gray-700 dark:text-gray-200">
+                        <div className="text-center py-4 sm:py-10">
+                            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white mb-1 sm:mb-2">Welcome, {user.name}!</h2>
+                            <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400 mb-4 sm:mb-8">Ask me anything about your Strava activities.</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-4 text-left">
+                                <button onClick={() => submitQuestion("What was my weekly mileage for the last 4 weeks?")} className="p-3 sm:p-4 bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 hover:border-orange-500 hover:shadow-sm transition-all text-gray-700 dark:text-gray-200 text-sm sm:text-base">
                                     "What was my weekly mileage for the last 4 weeks?"
                                 </button>
-                                <button onClick={() => submitQuestion("Compare my running pace this year vs last year.")} className="p-4 bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 hover:border-orange-500 hover:shadow-sm transition-all text-gray-700 dark:text-gray-200">
+                                <button onClick={() => submitQuestion("Compare my running pace this year vs last year.")} className="p-3 sm:p-4 bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 hover:border-orange-500 hover:shadow-sm transition-all text-gray-700 dark:text-gray-200 text-sm sm:text-base">
                                     "Compare my running pace this year vs last year."
                                 </button>
                             </div>
                             <button
                                 onClick={() => setShowHelp(true)}
-                                className="mt-6 text-sm text-orange-600 dark:text-orange-400 hover:underline"
+                                className="mt-3 sm:mt-6 text-xs sm:text-sm text-orange-600 dark:text-orange-400 hover:underline"
                             >
                                 View more example queries →
                             </button>
