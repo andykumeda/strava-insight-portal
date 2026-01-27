@@ -264,7 +264,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                 <div className="max-w-3xl mx-auto space-y-1 sm:space-y-6">
                     {messages.length === 0 && (
                         <div className="text-center pt-10 pb-20 sm:py-8">
-                            <h2 className="text-base sm:text-2xl font-bold text-gray-800 dark:text-white">Welcome!</h2>
+                            <h2 className="text-base sm:text-2xl font-bold text-gray-800 dark:text-white">Welcome, {user.name.split(' ')[0]}!</h2>
                             <p className="text-xs sm:text-base text-gray-600 dark:text-gray-400 mb-2 sm:mb-6">Ask about your Strava activities.</p>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-1 sm:gap-4 text-left">
                                 <button onClick={() => submitQuestion("What was my weekly mileage for the last 4 weeks?")} className="p-2 sm:p-4 bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 hover:border-orange-500 transition-all text-gray-700 dark:text-gray-200 text-xs sm:text-base leading-tight">
