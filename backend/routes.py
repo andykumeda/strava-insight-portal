@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+
 from datetime import datetime
 from typing import Dict
 
@@ -21,6 +22,7 @@ from .limiter import limiter
 from .llm_provider import get_llm_provider
 from .models import Segment, Token, User
 from .services.segment_service import get_best_efforts_for_segment, save_segments_from_activity
+from .tools import get_tool_definitions
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -561,15 +563,32 @@ async def query_strava_data(
         current_date_str = datetime.now().strftime("%B %d, %Y")
         
         system_instruction = f"""You are Antigravity, an elite Strava Activity Copilot.
-Today is {current_date_str}.
+Today's Date: {current_date_str}.
+
+- **TEMPORAL AWARENESS (CRITICAL)**:
+  - You are currently in {datetime.now().year}. Today is {current_date_str}.
+  - When the user asks for a summary of a past year (e.g., "summary for 2025"), you are reviewing **HISTORICAL DATA** from that year.
+  - **DO NOT** shift your "current" perspective to the requested year.
+  - **NEVER** refer to a date in the past (like Jan 27, 2025) as "tomorrow", "next week", "upcoming", or "scheduled".
+  - If you see an activity on Jan 27, 2025 and today is Jan 26, 2026, that activity is **ONE YEAR AGO**, not tomorrow.
 
 - **CONTEXT AWARENESS**:
-  - Always respect the current date: {current_date_str}.
-  - If a user asks about "today" or "yesterday", look for activities specifically on those dates.
-  - **CRITICAL**: If the provided DATA does not contain any activities for the requested date or name, DO NOT guess or show unrelated activities. Instead, state: "I don't see any activities in your history for [Date/Name]. Try syncing your latest data."
+  - If a user asks about "today" or "yesterday", look for activities specifically on those dates (relative to {current_date_str}).
+  - **CRITICAL**: The provided DATA is an initial summary. If the activity is not found in the summary, YOU MUST USE YOUR TOOLS (search_activities, sync_activities) to find it. Do NOT verify solely based on the summary.
+  - Only state "I don't see any activities" if the tools also fail to return results after a sync.
   - **AMBIGUITY RESOLUTION**:
-    - If the user asks for "longest" without specifying "time" or "distance", **ALWAYS ASSUME DISTANCE (MILEAGE)**.
+    - If the user asks for "longest" without specifying "time" or "distance", **ALWAYS ASSUME DISTANCE (MILEAGE)**. Use `distance_miles` field.
     - If the user asks for "biggest" or "largest", context usually implies distance or elevation. Default to distance unless elevation is mentioned.
+    - **SUPERLATIVE QUERIES**: For queries like "longest", "shortest", "fastest", "slowest", "biggest" - return **EXACTLY ONE** result (the single best match). Do NOT list multiple activities.
+    - **COMPARISON QUERIES**: 
+      - To compare data across years (e.g. "Dec 2025 vs Jan 2026"), you MUST ensure you have data for BOTH years.
+      - Call `get_activities_summary(year=2025)` AND `get_activities_summary(year=2026)` if needed.
+      - Or call `get_activities_summary()` (no arguments) to get all history.
+  - **ACTIVITY TYPES**:
+    - Treat "Trail Run" and "Run" as equivalent when calculating general running statistics (averages, totals, pace) unless the user specifically asks to distinguish them.
+  - **SEGMENT DISPLAY**:
+    - Only show "Top Segments" section if the `segments` array exists AND has at least one entry.
+    - If there are no segments in the data, do NOT output "No segments found" - simply omit the segments section entirely.
 
 You MUST strictly follow the MANDATORY OUTPUT RULES provided in the user prompt.
 
@@ -631,61 +650,151 @@ IMPORTANT INSTRUCTIONS:
 3. **SEGMENTS**: List segments under `#### Top Segments`. If no segments are in the data, state "No segments found".
 4. **DISTANCE DISPLAY**: For "exactly" queries, round to 1 decimal place (e.g. "5.0 miles") if the data is within 0.05 miles of the target.
 5. **GPX DOWNLOAD**: If the user asks to export/download a route as GPX, provide a download link: `[Download GPX File](/api/routes/{{route_id}}/gpx)`
+6. **NO HALLUCINATED SCHEDULES**: Strava data only contains PAST activities. Never describe an activity as "scheduled", "planned", or "upcoming".
 
 
 === USER QUESTION ===
 {query.question}
 === END USER QUESTION ===
 
-=== DATA ===
+=== DATA (Initial Summary - Use Tools for More) ===
 {context_json}
 === END DATA ===
 
 Answer the user's question following the MANDATORY RULES above.
 """
         
-        # 4. Generate Answer using LLM provider (OpenRouter, DeepSeek, or Gemini)
+        # 4. Agent Loop with Tool Calling (Phase 1)
         
-        # Check Cache
-        import hashlib
-
-        from .models import LLMCache
+        # Determine query type for smart model selection
+        query_type = determine_query_type(query.question, optimized_context)
+        llm = get_llm_provider()
         
-        # Hash prompt, instructions, AND critical context metadata to avoid stale cached data
-        # Include segment effort counts to ensure fresh responses when segment data changes
-        context_metadata = ""
-        if "mentioned_segments" in optimized_context:
-            for seg in optimized_context["mentioned_segments"]:
-                seg_id = seg.get("segment_id", "unknown")
-                effort_count = len(seg.get("effort_history", []))
-                context_metadata += f"seg_{seg_id}:{effort_count};"
+        # Prepare headers for tool execution
+        headers = {"X-Strava-Token": access_token}
         
-        combined_prompt = f"{system_instruction}\n\n{user_prompt}\n\nMETADATA:{context_metadata}"
-        prompt_hash = hashlib.sha256(combined_prompt.encode()).hexdigest()
-        cached_entry = db.query(LLMCache).filter(LLMCache.prompt_hash == prompt_hash).first()
-        
-        if cached_entry:
-            logger.info("Returning cached LLM response")
-            return QueryResponse(answer=cached_entry.response, data_used=context_data)
-
         try:
-            llm = get_llm_provider()
+            MAX_STEPS = 10
+            messages = [{"role": "user", "content": user_prompt}]
+            tool_definitions = get_tool_definitions()
+            answer_text = ""
             
-            # Determine query type for smart model selection (OpenRouter only)
-            query_type = determine_query_type(query.question, optimized_context)
-            
-            answer_text = await llm.generate(
-                prompt=user_prompt,
-                system_instruction=system_instruction,
-                temperature=0.3,
-                max_tokens=2000,
-                query_type=query_type  # For smart model selection with OpenRouter
-            )
-            
-            # Save to Cache
-            new_cache = LLMCache(prompt_hash=prompt_hash, response=answer_text)
-            db.add(new_cache)
-            db.commit()
+            # Agent Loop
+            for step in range(MAX_STEPS):
+                # Call LLM with current history and tools
+                # Note: We pass 'user_prompt' as the 'prompt' arg just to satisfy the signature, 
+                # but 'messages' will take precedence.
+                response_dict = await llm.generate(
+                    prompt=user_prompt, 
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                    max_tokens=2000,
+                    query_type=query_type,
+                    tools=tool_definitions,
+                    messages=messages
+                )
+                
+                content = response_dict.get("content")
+                tool_calls = response_dict.get("tool_calls")
+                
+                # If content is present, add it to history
+                if content:
+                    messages.append({"role": "assistant", "content": content})
+                    # If no tool calls, this is likely the final answer (or a step thought)
+                    # We update answer_text progressively, but usually the last message is the answer.
+                    answer_text = content
+                
+                if not tool_calls:
+                    # No tools called -> We are done.
+                    break
+                    
+                # Execute Tools
+                logger.info(f"Agent Loop Step {step+1}: Processing {len(tool_calls)} tool calls")
+                
+                for tc in tool_calls:
+                    tool_name = tc["name"]
+                    tool_id = tc["id"]
+                    try: 
+                        tool_args = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                    except:
+                        tool_args = {}
+                    
+                    logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                    result_content = ""
+                    
+                    try:
+                        if tool_name == "get_activities_summary":
+                             async with httpx.AsyncClient() as c:
+                                resp = await c.get(
+                                    f"{MCP_SERVER_URL}/activities/summary", 
+                                    headers=headers, 
+                                    params=tool_args,
+                                    timeout=30.0
+                                )
+                                result_content = resp.text
+                                
+                        elif tool_name == "search_activities":
+                             async with httpx.AsyncClient() as c:
+                                resp = await c.get(
+                                    f"{MCP_SERVER_URL}/activities/search", 
+                                    headers=headers, 
+                                    params=tool_args, 
+                                    timeout=30.0
+                                )
+                                result_content = resp.text
+                                
+                        elif tool_name == "get_activity_details":
+                             activity_id = tool_args.get("activity_id")
+                             async with httpx.AsyncClient() as c:
+                                resp = await c.get(
+                                    f"{MCP_SERVER_URL}/activities/{activity_id}", 
+                                    headers=headers, 
+                                    timeout=30.0
+                                )
+                                result_content = resp.text
+                                
+                        elif tool_name == "get_segment_details":
+                             segment_id = tool_args.get("segment_id")
+                             async with httpx.AsyncClient() as c:
+                                resp = await c.get(
+                                    f"{MCP_SERVER_URL}/segments/{segment_id}", 
+                                    headers=headers, 
+                                    timeout=30.0
+                                )
+                                result_content = resp.text
+                                
+                        elif tool_name == "sync_activities":
+                             async with httpx.AsyncClient() as c:
+                                resp = await c.post(
+                                    f"{MCP_SERVER_URL}/activities/sync", 
+                                    headers=headers, 
+                                    timeout=60.0
+                                )
+                                result_content = resp.text
+                                
+                        else:
+                            result_content = f"Error: Unknown tool '{tool_name}'"
+    
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 429:
+                            result_content = "Error: Strava API Rate Limit Reached. Stop tool usage immediately."
+                        else:
+                            result_content = f"Error executing tool: {str(e)}"
+                    except Exception as e:
+                        result_content = f"Error executing tool: {str(e)}"
+                    
+                    # Append result
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id, 
+                        "name": tool_name, 
+                        "content": result_content
+                    })
+            else:
+                 logger.warning("Agent Loop reached MAX_STEPS without final answer.")
+                 answer_text += "\n\n(Note: I reached the maximum number of steps processing this request.)"
+
+
             
         except ValueError as e:
             # Configuration error

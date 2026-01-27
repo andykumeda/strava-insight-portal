@@ -60,3 +60,8 @@ reference-mcp/
 # Logs
 *.log
 logs/
+
+# Local Data
+rate_limit_state.json
+strava_cache.json
+strava-mcp-server/

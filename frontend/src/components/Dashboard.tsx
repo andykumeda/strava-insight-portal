@@ -58,7 +58,7 @@ const EXAMPLE_QUERIES = [
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ user }) => {
-    const messagesEndRef = React.useRef<HTMLDivElement>(null);
+    const chatContainerRef = React.useRef<HTMLDivElement>(null);
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(false);
@@ -66,12 +66,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     const [historyIndex, setHistoryIndex] = useState(-1);
     const [showHelp, setShowHelp] = useState(false);
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    };
-
+    // Scroll the last user message to the top of the viewport
     React.useEffect(() => {
-        scrollToBottom();
+        const userMessages = chatContainerRef.current?.querySelectorAll('.user-message');
+        if (userMessages && userMessages.length > 0) {
+            const lastUserMsg = userMessages[userMessages.length - 1];
+            lastUserMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
     }, [messages, loading]);
 
     const submitQuestion = async (text: string) => {
@@ -180,9 +181,23 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                     </h1>
                 </div>
                 <div className="flex items-center gap-2 sm:gap-4">
-                    {/* Help Button moved to input */}
+                    {/* Help Button - Header Version */}
+                    <button
+                        onClick={() => setShowHelp(true)}
+                        className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-2.5 py-1.5 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                        title="View example queries"
+                    >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span className="font-medium hidden sm:inline">Help</span>
+                    </button>
                     <ThemeToggle />
-                    <div className="flex items-center gap-2">
+                    <a
+                        href={`https://www.strava.com/athletes/${user.strava_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                        title="View Strava Profile"
+                    >
                         {user.profile_picture ? (
                             <img src={user.profile_picture} alt={user.name} className="w-7 h-7 sm:w-8 sm:h-8 rounded-full" />
                         ) : (
@@ -191,7 +206,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                             </div>
                         )}
                         <span className="font-medium text-gray-700 dark:text-gray-200 hidden sm:inline text-sm">{user.name}</span>
-                    </div>
+                    </a>
                 </div>
             </header>
 
@@ -242,7 +257,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
             )}
 
             {/* Chat Area */}
-            <div className="flex-1 overflow-y-auto p-2 sm:p-4 md:p-8 min-h-0 scroll-pt-20">
+            <div
+                ref={chatContainerRef}
+                className="flex-1 overflow-y-auto p-2 sm:p-4 md:p-8 min-h-0 scroll-pt-20"
+            >
                 <div className="max-w-3xl mx-auto space-y-1 sm:space-y-6">
                     {messages.length === 0 && (
                         <div className="text-center pt-10 pb-20 sm:py-8">
@@ -266,7 +284,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                     )}
 
                     {messages.map(msg => (
-                        <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end user-message' : 'justify-start'}`}>
                             <div className={`max-w-xl rounded-2xl px-6 py-4 transition-colors duration-200 ${msg.role === 'user'
                                 ? 'bg-orange-600 text-white rounded-br-none'
                                 : 'bg-white dark:bg-gray-800 border dark:border-gray-700 text-gray-800 dark:text-gray-100 rounded-bl-none shadow-sm'
@@ -309,7 +327,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                             </div>
                         </div>
                     )}
-                    <div ref={messagesEndRef} />
                 </div>
             </div>
 

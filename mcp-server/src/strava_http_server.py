@@ -426,23 +426,19 @@ async def _fetch_all_activities_logic(x_strava_token: str, refresh: bool) -> Lis
     
     logger.info(f"Fetched and cached {len(all_activities)} total activities for athlete {athlete_id}")
     
-    # Background hydration DISABLED for multi-user quota fairness.
-    # Activity details are now fetched only on-demand when a user queries for them.
-    # try:
-    #     if not HYDRATION_LOCK.locked():
-    #          logger.info("Triggering automatic background hydration...")
-    #          asyncio.create_task(hydrate_activities_background(x_strava_token))
-    #     else:
-    #          logger.info("Hydration already in progress.")
-    # except Exception:
-    #     pass # Don't block
-        
+    
     return all_activities
 
 @app.get("/activities/all")
 async def get_all_activities(x_strava_token: str = Header(..., alias="X-Strava-Token"), refresh: bool = False) -> List[Dict[str, Any]]:
     """Get ALL activities from Strava by paginating through all pages. Results are cached for 5 minutes."""
     return await _fetch_all_activities_logic(x_strava_token, refresh)
+
+@app.post("/activities/sync")
+async def sync_activities(x_strava_token: str = Header(..., alias="X-Strava-Token")):
+    """Force sync of activities from Strava."""
+    activities = await _fetch_all_activities_logic(x_strava_token, refresh=True)
+    return {"message": f"Synced {len(activities)} activities", "count": len(activities)}
 
 
     
@@ -729,16 +725,22 @@ async def hydrate_specific_activities(
         return {"message": "Completed specific hydration."}
 
 @app.get("/activities/summary")
-async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:
+async def get_activities_summary(
+    year: Optional[int] = None,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> Dict[str, Any]:
     """Get a summarized view of all activities for efficient AI queries. Returns aggregated data by year/month."""
     # Get all activities (will use cache if available)
     all_activities = await get_all_activities(x_strava_token)
     
-    # Background hydration DISABLED for multi-user quota fairness.
-    # try:
-    #      asyncio.create_task(hydrate_activities_background(x_strava_token))
-    # except Exception:
-    #      pass
+    # Filter by year if requested
+    if year:
+        target_year = str(year)
+        all_activities = [
+            a for a in all_activities 
+            if (a.get("start_date_local") or "").startswith(target_year)
+        ]
+    
     
     # Group activities by year and month
     by_year: Dict[str, Dict[str, Any]] = {}
@@ -780,7 +782,7 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
         if date_key not in activities_by_date:
             activities_by_date[date_key] = []
         
-        activity_type = activity.get("sport_type", activity.get("type", "Unknown"))
+        activity_type = activity.get("type", "Unknown")  # Use 'type' not 'sport_type' - groups Run/TrailRun together
         distance_miles = activity.get("distance", 0) / 1609.344 # Official meters per mile for precision
         elevation_feet = activity.get("total_elevation_gain", 0) * 3.28084
         moving_time = activity.get("moving_time", 0)
@@ -833,12 +835,29 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
         for type_data in year_data["by_type"].values():
             type_data["distance_miles"] = round(type_data["distance_miles"], 2)
         
+        # Compute combined "all_runs" totals (Run + TrailRun + VirtualRun)
+        run_types = ["Run", "TrailRun", "VirtualRun", "Trail Run"]
+        combined_runs = {"count": 0, "distance_miles": 0.0, "elevation_feet": 0.0, "moving_time_seconds": 0}
+        for rtype in run_types:
+            if rtype in year_data["by_type"]:
+                combined_runs["count"] += year_data["by_type"][rtype]["count"]
+                combined_runs["distance_miles"] += year_data["by_type"][rtype]["distance_miles"]
+        year_data["all_runs_combined"] = combined_runs
+        
         for month_data in year_data["by_month"].values():
             month_data["distance_miles"] = round(month_data["distance_miles"], 2)
             month_data["elevation_feet"] = round(month_data["elevation_feet"], 0)
             # Round monthly type totals
             for m_type_data in month_data["by_type"].values():
                 m_type_data["distance_miles"] = round(m_type_data["distance_miles"], 2)
+            
+            # Compute combined "all_runs" totals for this month
+            month_combined_runs = {"count": 0, "distance_miles": 0.0}
+            for rtype in run_types:
+                if rtype in month_data["by_type"]:
+                    month_combined_runs["count"] += month_data["by_type"][rtype]["count"]
+                    month_combined_runs["distance_miles"] += month_data["by_type"][rtype]["distance_miles"]
+            month_data["all_runs_combined"] = month_combined_runs
     
     return {
         "total_activities": len(all_activities),
@@ -846,6 +865,45 @@ async def get_activities_summary(x_strava_token: str = Header(..., alias="X-Stra
         "activities_by_date": activities_by_date,  # Full list for date queries
         "cache_info": f"Data cached at {datetime.now().isoformat()}"
     }
+
+@app.get("/activities/search")
+async def search_activities(
+    query: Optional[str] = None,
+    activity_type: Optional[str] = None,
+    after: Optional[str] = None, 
+    before: Optional[str] = None,
+    limit: int = 10,
+    x_strava_token: str = Header(..., alias="X-Strava-Token")
+) -> List[Dict[str, Any]]:
+    """Search for activities using efficient local filtering on cached data."""
+    all_activities = await get_all_activities(x_strava_token)
+    results = []
+    
+    # Normalize inputs
+    q = query.lower() if query else None
+    
+    for act in all_activities:
+        # Filter by Type
+        if activity_type and act.get("type") != activity_type:
+            continue
+            
+        # Filter by Date
+        start_date = act.get("start_date_local") or ""
+        if after and start_date < after: continue
+        if before and start_date > before: continue
+        
+        # Filter by Query (Name Search)
+        if q:
+            name = act.get("name", "").lower()
+            if q not in name:
+                continue
+        
+        results.append(act)
+        
+    # Sort by date descending (usually they are already sorted, but ensure it)
+    results.sort(key=lambda x: x.get("start_date_local", ""), reverse=True)
+    
+    return results[:limit]
 
 @app.get("/activities/{activity_id}")
 async def get_activity(activity_id: int, x_strava_token: str = Header(..., alias="X-Strava-Token")) -> Dict[str, Any]:

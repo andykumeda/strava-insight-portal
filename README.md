@@ -4,11 +4,12 @@ A production-ready web application that lets users log in with Strava and ask na
 
 ## Features
 
-### 🧠 Intelligent Querying
-- **Natural Language**: Ask questions like "How many miles did I run in 2025 vs 2024?" or "Show me runs where I mentioned 'pain' in the notes."
-- **Smart Context**: Dynamically switches between summary data (for fast aggregates) and detailed activity records (for specific searches) to optimize performance and cost.
-- **Private Notes Search**: Supports searching your activity notes and descriptions for keywords (e.g., "race", "injury", "easy").
-- **Enriched Activity Details**: Automatically pulls top segments, parses "similar activities" to find matched routes, and formats everything with clickable links.
+### 🧠 Agentic & Intelligent Querying
+- **Agent Loop Architecture**: Uses a smart "Agent Loop" that can autonomously search, filter, and synchronize data to answer complex questions.
+- **Natural Language**: Ask questions like "How many miles did I run in 2025 vs 2024?" or "Show me matches for 'Morning Run'."
+- **Smart Tools**: The Agent uses specialized tools (`search_activities`, `get_activities_summary`, `sync_activities`) to find exactly what it needs.
+- **Auto-Sync**: If data is missing (e.g., "today's run"), the Agent can trigger a synchronization automatically.
+- **Comparison Logic**: Expertly handles multi-year comparisons (e.g., "This month vs Last month") by fetching independent datasets.
 - **Group Run Detection**: Identifies how many athletes you ran with and highlights social activities.
 - **Deep Data Analysis**:
   - **Zone Analysis**: Power and Heart Rate zone distribution for deeper training insights.

@@ -50,7 +50,64 @@ class ContextOptimizer:
         question_lower = self.question.lower()
         print(f"ContextOptimizer: Parsing date from '{self.question}'")
         
-        # Check for Month names or specific date formats FIRST
+        # PRIORITY 0: Handle relative date phrases like "this month", "this week", "last month"
+        now = datetime.now()
+        
+        if 'this month' in question_lower:
+            start = datetime(now.year, now.month, 1)
+            # End = last day of current month (approximated by next month - 1 day)
+            if now.month == 12:
+                end = datetime(now.year + 1, 1, 1) - timedelta(seconds=1)
+            else:
+                end = datetime(now.year, now.month + 1, 1) - timedelta(seconds=1)
+            print(f"ContextOptimizer: Parsed 'this month' -> {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
+            return (start, end)
+        
+        if 'last month' in question_lower:
+            if now.month == 1:
+                start = datetime(now.year - 1, 12, 1)
+                end = datetime(now.year, 1, 1) - timedelta(seconds=1)
+            else:
+                start = datetime(now.year, now.month - 1, 1)
+                end = datetime(now.year, now.month, 1) - timedelta(seconds=1)
+            print(f"ContextOptimizer: Parsed 'last month' -> {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
+            return (start, end)
+            
+        if 'this week' in question_lower:
+            # Start of week (Monday)
+            start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(hour=23, minute=59, second=59)
+            print(f"ContextOptimizer: Parsed 'this week' -> {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
+            return (start, end)
+            
+        if 'last week' in question_lower:
+            # Monday of last week
+            start = now - timedelta(days=now.weekday() + 7)
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+            print(f"ContextOptimizer: Parsed 'last week' -> {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
+            return (start, end)
+        
+        # PRIORITY 1: Check for explicit years FIRST (e.g., "2025", "2024-2025")
+        # This prevents dateparser from interpreting "2025" as a specific date like Jan 27, 2025
+        years = re.findall(r'\b(20\d{2})\b', self.question)
+        # Only use year regex if no specific month is mentioned (e.g. "January 2025" should use dateparser)
+        month_names = ['january', 'february', 'march', 'april', 'may', 'june', 
+                       'july', 'august', 'september', 'october', 'november', 'december']
+        has_specific_month = any(m in question_lower for m in month_names)
+        
+        if years and not has_specific_month:
+            years_int = [int(y) for y in years]
+            start_year = min(years_int)
+            end_year = max(years_int)
+            print(f"ContextOptimizer: Parsed explicit years: {start_year}-{end_year}")
+            return (
+                datetime(start_year, 1, 1),
+                datetime(end_year, 12, 31, 23, 59, 59)
+            )
+        
+        # Check for Month names or specific date formats 
         # Also check for relative triggers like "on this day", "ago", "today"
         months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
         triggers = ['on this day', 'ago', 'today', 'yesterday', 'tomorrow']
@@ -429,12 +486,41 @@ class ContextOptimizer:
         3. Uses summaries when appropriate
         """
         # Initial context (stats only)
-        # Scrub statistical data of unwanted fields
-        scrubbed_stats = self.stats.copy() if self.stats else {}
-        if 'athlete' in scrubbed_stats: scrubbed_stats.pop('athlete') # Too much detail
+        # Scrub statistical data of unwanted fields and convert units (meters -> miles/feet)
+        scrubbed_stats = {}
+        if self.stats:
+            # key map: original_key -> (new_key, unit_conversion_factor)
+            # distance (meters) -> miles (1/1609.34)
+            # elevation (meters) -> feet (3.28084)
+            # moving_time (seconds) -> kept as seconds but add human readable
+            
+            print(f"ContextOptimizer: Processing stats keys: {list(self.stats.keys())}")
+            for key, val in self.stats.items():
+                if key == 'athlete': continue # Too much detail
+                
+                # Rename "all_run_totals" -> "lifetime_run_totals" to be explicit
+                new_key = key.replace("all_", "lifetime_").replace("recent_", "last_4_weeks_")
+                
+                if isinstance(val, dict):
+                    new_val = val.copy()
+                    # Convert distance
+                    if 'distance' in new_val:
+                        new_val['distance_miles'] = round(new_val.pop('distance', 0) / 1609.344, 1)
+                    # Convert elevation
+                    if 'elevation_gain' in new_val:
+                        new_val['elevation_feet'] = round(new_val.pop('elevation_gain', 0) * 3.28084, 0)
+                    # Format time
+                    if 'moving_time' in new_val:
+                        m, s = divmod(new_val['moving_time'], 60)
+                        h, m = divmod(m, 60)
+                        new_val['moving_time_display'] = f"{h}h {m}m"
+                        
+                    scrubbed_stats[new_key] = new_val
+                else:
+                    scrubbed_stats[new_key] = val
         
         optimized = {
-            "stats": scrubbed_stats,
+            "lifetime_stats": scrubbed_stats,
         }
         
         def scrub_activity(act):
@@ -471,16 +557,97 @@ class ContextOptimizer:
         pre_keyword_count = len(relevant_activities)
         relevant_activities = self.filter_by_keyword(relevant_activities, date_range_applied=(date_range is not None))
         has_keywords = len(relevant_activities) < pre_keyword_count
+        
+        # ========== SUPERLATIVE QUERY HANDLING (CODE-LEVEL, NOT PROMPT) ==========
+        # Detect queries like "longest run", "fastest mile", "shortest hike" and pre-filter
+        # to return ONLY the single best match. This is deterministic, not LLM-dependent.
+        question_lower = self.question.lower()
+        
+        # Check if asking for runs specifically
+        wants_runs = any(w in question_lower for w in ['run', 'running', 'trail run'])
+        
+        # Filter to only Run types if asking about runs
+        if wants_runs and relevant_activities:
+            run_activities = [a for a in relevant_activities if a.get('type') in ['Run', 'TrailRun', 'VirtualRun']]
+            if run_activities:
+                relevant_activities = run_activities
+        
+        superlative_result = None
+        
+        if 'longest' in question_lower and relevant_activities:
+            # Longest = max distance - use distance_miles (from summary endpoint) OR distance (from cache)
+            def get_distance(a):
+                if 'distance_miles' in a:
+                    return a.get('distance_miles', 0) or 0
+                return (a.get('distance', 0) or 0) / 1609.344  # Convert meters to miles if raw
+            
+            sorted_by_dist = sorted(relevant_activities, key=get_distance, reverse=True)
+            print(f"ContextOptimizer: DEBUG - Top 5 by distance:")
+            for a in sorted_by_dist[:5]:
+                print(f"  - {a.get('name')}: {get_distance(a):.2f} mi, type={a.get('type')}")
+            
+            superlative_result = max(relevant_activities, key=get_distance)
+            print(f"ContextOptimizer: Superlative 'longest' -> returning single activity: {superlative_result.get('name')}")
+            
+        elif 'shortest' in question_lower and relevant_activities:
+            # Shortest = min distance (excluding 0)
+            non_zero = [a for a in relevant_activities if (a.get('distance') or 0) > 0]
+            if non_zero:
+                superlative_result = min(non_zero, key=lambda x: x.get('distance', 0))
+                print(f"ContextOptimizer: Superlative 'shortest' -> returning single activity: {superlative_result.get('name')}")
+                
+        elif 'fastest' in question_lower and relevant_activities:
+            # Fastest = highest average speed (distance / moving_time)
+            with_speed = [a for a in relevant_activities if (a.get('distance') or 0) > 0 and (a.get('moving_time') or 0) > 0]
+            if with_speed:
+                superlative_result = max(with_speed, key=lambda x: x.get('distance', 0) / x.get('moving_time', 1))
+                print(f"ContextOptimizer: Superlative 'fastest' -> returning single activity: {superlative_result.get('name')}")
+                
+        elif 'slowest' in question_lower and relevant_activities:
+            # Slowest = lowest average speed
+            with_speed = [a for a in relevant_activities if (a.get('distance') or 0) > 0 and (a.get('moving_time') or 0) > 0]
+            if with_speed:
+                superlative_result = min(with_speed, key=lambda x: x.get('distance', 0) / x.get('moving_time', 1))
+                print(f"ContextOptimizer: Superlative 'slowest' -> returning single activity: {superlative_result.get('name')}")
+                
+        elif ('most elevation' in question_lower or 'highest elevation' in question_lower or 'biggest climb' in question_lower) and relevant_activities:
+            # Most elevation = max elevation gain
+            superlative_result = max(relevant_activities, key=lambda x: x.get('total_elevation_gain', 0) or 0)
+            print(f"ContextOptimizer: Superlative 'most elevation' -> returning single activity: {superlative_result.get('name')}")
+        
+        # If we found a superlative match, return ONLY that activity
+        if superlative_result:
+            # Convert distance to miles for display consistency
+            scrubbed = {k: v for k, v in superlative_result.items() if k not in ['map', 'polyline', 'summary_polyline']}
+            if 'distance' in scrubbed:
+                scrubbed['distance_miles'] = round(scrubbed['distance'] / 1609.344, 2)
+            if 'total_elevation_gain' in scrubbed:
+                scrubbed['elevation_feet'] = round(scrubbed['total_elevation_gain'] * 3.28084, 0)
+            
+            optimized["relevant_activities"] = [scrubbed]
+            optimized["strategy"] = "superlative_single_result"
+            optimized["note"] = f"Pre-filtered to single best match for superlative query"
+            optimized["activity_count"] = 1
+            # Remove lifetime stats to avoid confusion
+            if "lifetime_stats" in optimized:
+                del optimized["lifetime_stats"]
+            return optimized
 
         # Check if question explicitly needs a list or specific details
-        needs_list = any(phrase in self.question.lower() for phrase in [
-            'list', 'show', 'what did i do', 'details', 'specific', 'names', 'title', 'find', 'search', 'which', 'what run'
-        ])
+        # BUT exclude 'show' if it's combined with 'summary' (e.g., 'show my summary')
+        question_lower = self.question.lower()
+        has_summary_word = 'summary' in question_lower or 'summari' in question_lower
+        
+        list_phrases = ['list', 'what did i do', 'details', 'specific', 'names', 'title', 'find', 'search', 'which', 'what run']
+        needs_list = any(phrase in question_lower for phrase in list_phrases)
+        # 'show' only triggers needs_list if NOT asking for a summary
+        if 'show' in question_lower and not has_summary_word:
+            needs_list = True
         
         # Check if question is about aggregates (can use summaries)
-        is_aggregate = any(phrase in self.question.lower() for phrase in [
-            'total', 'sum', 'average', 'compare', 'statistics', 'stats',
-            'how many', 'how much', 'total distance', 'total time', 'count', 'summarize'
+        is_aggregate = any(phrase in question_lower for phrase in [
+            'total', 'sum', 'summary', 'average', 'compare', 'statistics', 'stats',
+            'how many', 'how much', 'total distance', 'total time', 'count', 'summarize', 'monthly', 'yearly', 'weekly'
         ])
         
         # Strategy: Use summaries for aggregates, details for specific queries
@@ -491,7 +658,10 @@ class ContextOptimizer:
             optimized["strategy"] = "summary_only"
             optimized["note"] = "Aggregates use monthly/yearly summaries"
             optimized["summary_by_year"] = self.by_year  # Include summary for this strategy
-            print(f"ContextOptimizer: Chosen strategy: {optimized['strategy']} (Aggregates)")
+            # CRITICAL: Remove lifetime_stats for yearly summaries to prevent LLM confusion
+            if "lifetime_stats" in optimized:
+                del optimized["lifetime_stats"]
+            print(f"ContextOptimizer: Chosen strategy: {optimized['strategy']} (Aggregates, lifetime_stats removed)")
             return optimized
         
         # Estimate token usage
