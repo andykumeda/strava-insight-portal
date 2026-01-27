@@ -25,9 +25,7 @@ from .services.segment_service import get_best_efforts_for_segment, save_segment
 from .tools import get_tool_definitions
 
 router = APIRouter()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("strava_copilot")
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 def format_seconds_to_str(seconds: int) -> str:
     """Format seconds into Mm Ss string."""

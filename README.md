@@ -17,12 +17,13 @@ A production-ready web application that lets users log in with Strava and ask na
   - **Map Visualization**: Renders interactive maps for activities directly in the chat.
 
 ### ⚡ Performance & Scale
-- **Full History Access**: Fetches and caches your entire Strava activity history (thousands of activities).
+### ⚡ Performance & Scale
+- **Smart History Access**: Efficiently fetches and caches your Strava history using incremental sync.
 - **Instant Comparisons**: Aggregate queries (e.g., monthly totals) are processed instantly using pre-computed summaries.
 - **Async Architecture**: Fully asynchronous backend prevents blocking during large data syncs.
-- **Smart Hydration Priority**: Background sync smartly prioritizes high-value activities (Runs, Rides, Swims) and social events (Kudos/Comments), skipping less relevant data to maximize API quota efficiency.
-- **On-Demand Hydration**: Querying specific historical dates automatically triggers an immediate background fetch for those activities if they aren't already hydrated.
-- **Robust Rate Handling**: Custom-built `StravaRateLimiter` enforces strict daily (800) and 15-minute (80) limits with state persistence and automatic safety aborts.
+- **Quota Protection**: Incremental synchronization minimizes API usage (often 1 call vs 70+).
+- **Agent-Driven Sync**: The AI Agent autonomously decides when to refresh data if it suspects missing activities.
+- **Robust Rate Handling**: Custom-built `StravaRateLimiter` enforces strict daily (800) and 15-minute (80) limits with state persistence.
 
 ### 🔒 Enterprise-Grade Security
 - **Data Encryption**: Strava access tokens are encrypted at rest in the database using Fernet (AES).
